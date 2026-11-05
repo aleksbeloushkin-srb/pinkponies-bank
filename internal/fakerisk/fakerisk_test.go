@@ -131,16 +131,20 @@ func TestFaultsBeforeExecution(t *testing.T) {
 }
 
 // hang executes and then answers nothing until the caller gives up; the
-// retry with the same key finds the screening.
+// retry with the same key finds the screening. The caller gives up when the
+// server reports the request parked, so no timer decides the outcome.
 func TestHangExecutesThenRetryReplays(t *testing.T) {
 	f := newFixture(t, Config{Faults: []string{FaultHang}})
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	f.srv.mu.Lock()
+	f.srv.onHang = cancel
+	f.srv.mu.Unlock()
 	body, _ := json.Marshal(Request{TransferID: "t", AmountMinor: 100, Currency: "EUR"})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, f.http.URL+"/screenings", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "k")
-	if _, err := f.client.Do(req); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want the caller's deadline", err)
+	if _, err := f.client.Do(req); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the caller giving up", err)
 	}
 	if f.stat("executions") != 1 || f.stat("fault_hang") != 1 {
 		t.Fatalf("stats = %v", f.srv.control().Stats)

@@ -146,8 +146,13 @@ func reasonText(code string) string {
 	return strings.ReplaceAll(code, "_", " ")
 }
 
-// short is the beginning of an id, enough to recognise an account.
-func short(id uuid.UUID) string { return id.String()[:8] }
+// short is the end of an id, enough to recognise an account. Not the
+// beginning: a UUIDv7 starts with its creation time, so accounts created
+// together share their first characters.
+func short(id uuid.UUID) string {
+	s := id.String()
+	return s[len(s)-8:]
+}
 
 var exponents = map[string]int{"JPY": 0}
 

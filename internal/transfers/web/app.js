@@ -59,7 +59,7 @@ function formatAmount(minor, currency) {
 
 function accountName(id) {
   const a = accounts.find((x) => x.id === id);
-  return a ? a.name : id.slice(0, 8);
+  return a ? a.name : id.slice(-8); // a UUIDv7 starts with its creation time
 }
 
 // --- Accounts ---------------------------------------------------------------

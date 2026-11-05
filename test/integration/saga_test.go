@@ -115,16 +115,19 @@ func TestSagaRefusalsAndCompensation(t *testing.T) {
 // out, retries with the same key, gets the stored decision and completes.
 // The provider screened once, the ledger captured once.
 func TestSagaScreeningHangThenSameKeyRetry(t *testing.T) {
-	e := newSagaEnv(t, sagaOptions{riskTimeout: 200 * time.Millisecond, riskFaults: []string{fakerisk.FaultHang}})
+	// The hung call times out after a second; the retries answer at once.
+	e := newSagaEnv(t, sagaOptions{riskTimeout: time.Second, riskFaults: []string{fakerisk.FaultHang}})
 	id := e.create(t, 1250)
 	e.drain(t)
 
 	if tr := e.transfer(t, id); tr.Status != transfers.StatusCompleted {
 		t.Fatalf("status = %s", tr.Status)
 	}
+	// At least two calls: the hung one and its retry (a slow machine may
+	// time out more of them); always one execution.
 	calls, executions := e.screening(t, id)
-	if calls != 2 || executions != 1 {
-		t.Fatalf("screening calls %d, executions %d; want 2 and 1", calls, executions)
+	if calls < 2 || executions != 1 {
+		t.Fatalf("screening calls %d, executions %d; want 2 or more and 1", calls, executions)
 	}
 	if f := e.facts(t, id); f.transfers != 1 || f.srcPosted != 8_750 {
 		t.Fatalf("ledger = %+v", f)

@@ -48,8 +48,8 @@ const (
 )
 
 // ErrorReason lists the reasons of google.rpc.ErrorInfo details. The value
-// names are the reason strings, as in the Google API design guide, so the
-// values are not prefixed with the enum name.
+// names are the reason strings clients match on, so they are not prefixed
+// with the enum name (buf.yaml exempts this file from that lint rule).
 type ErrorReason int32
 
 const (

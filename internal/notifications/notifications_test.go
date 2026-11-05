@@ -36,6 +36,15 @@ func event(typ eventsv1.Type, reason string) eventsv1.TransferEvent {
 	}
 }
 
+// UUIDv7 ids created in the same millisecond share their first characters;
+// the short form must still tell them apart.
+func TestShortTellsUUIDv7Apart(t *testing.T) {
+	a, b := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	if short(a) == short(b) {
+		t.Fatalf("short(%s) == short(%s)", a, b)
+	}
+}
+
 func TestForEvent(t *testing.T) {
 	tests := []struct {
 		typ      eventsv1.Type

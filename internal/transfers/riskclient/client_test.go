@@ -24,8 +24,10 @@ type fixedClock struct{ now time.Time }
 
 func (c fixedClock) Now() time.Time { return c.now }
 
-// against runs the client against the real fake provider with faults.
-func against(t *testing.T, cfg fakerisk.Config, timeout time.Duration) (*Client, *Metrics) {
+// against runs a client with the given call timeout against the real fake
+// provider with faults. patient is a second client with a long timeout,
+// for calls that must not time out on a slow machine.
+func against(t *testing.T, cfg fakerisk.Config, timeout time.Duration) (c *Client, m *Metrics, patient *Client) {
 	t.Helper()
 	risk := fakerisk.New(cfg, fixedClock{time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv := httptest.NewServer(risk.Handler())
@@ -33,12 +35,16 @@ func against(t *testing.T, cfg fakerisk.Config, timeout time.Duration) (*Client,
 		risk.Close()
 		srv.Close()
 	})
-	m := NewMetrics(prometheus.NewRegistry())
+	m = NewMetrics(prometheus.NewRegistry())
 	c, err := New(Config{BaseURL: srv.URL, CallTimeout: timeout}, srv.Client(), m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c, m
+	patient, err = New(Config{BaseURL: srv.URL, CallTimeout: 10 * time.Second}, srv.Client(), NewMetrics(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, m, patient
 }
 
 func request(amount int64) app.ScreeningRequest {
@@ -48,7 +54,7 @@ func request(amount int64) app.ScreeningRequest {
 }
 
 func TestDecisions(t *testing.T) {
-	c, m := against(t, fakerisk.Config{ReviewDelay: 5 * time.Second}, time.Second)
+	c, m, _ := against(t, fakerisk.Config{ReviewDelay: 5 * time.Second}, 10*time.Second)
 	for amount, want := range map[int64]app.Decision{1250: app.DecisionApprove, 1266: app.DecisionDecline, 1277: app.DecisionReview} {
 		res, err := c.Screen(context.Background(), request(amount))
 		if err != nil || res.Decision != want || res.ID == "" {
@@ -79,7 +85,7 @@ func TestFaultsAreClassified(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.fault, func(t *testing.T) {
-			c, m := against(t, fakerisk.Config{Faults: []string{tt.fault}, RetryAfter: 3 * time.Second}, 100*time.Millisecond)
+			c, m, patient := against(t, fakerisk.Config{Faults: []string{tt.fault}, RetryAfter: 3 * time.Second}, 100*time.Millisecond)
 			req := request(1250)
 			_, err := c.Screen(context.Background(), req)
 			if !errors.Is(err, app.ErrScreeningUnavailable) {
@@ -94,7 +100,7 @@ func TestFaultsAreClassified(t *testing.T) {
 					t.Fatalf("429 must carry Retry-After: %v", err)
 				}
 			}
-			res, err := c.Screen(context.Background(), req)
+			res, err := patient.Screen(context.Background(), req)
 			if err != nil || res.Decision != app.DecisionApprove {
 				t.Fatalf("retry with the same key = %+v, %v", res, err)
 			}

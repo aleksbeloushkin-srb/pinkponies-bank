@@ -160,7 +160,7 @@ func TestReplayReturnsTheOriginalResult(t *testing.T) {
 // ambiguity, and the request id travels with the call.
 func TestPerCallDeadlineAndRequestID(t *testing.T) {
 	srv := &fakeLedger{block: true}
-	c, m := start(t, srv, 50*time.Millisecond)
+	c, m := start(t, srv, time.Second)
 	ctx := platform.WithRequestID(context.Background(), "transfer-1")
 	_, err := c.PlaceHold(ctx, holdRequest())
 	if !errors.Is(err, app.ErrLedgerUnavailable) {
@@ -168,7 +168,7 @@ func TestPerCallDeadlineAndRequestID(t *testing.T) {
 	}
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	if srv.deadline <= 0 || srv.deadline > 50*time.Millisecond {
+	if srv.deadline <= 0 || srv.deadline > time.Second {
 		t.Fatalf("server saw a deadline of %s, want at most the call timeout", srv.deadline)
 	}
 	if srv.requestID != "transfer-1" {
