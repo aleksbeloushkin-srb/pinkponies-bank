@@ -1,0 +1,11 @@
+# Code generation for the gRPC contracts. Run `make proto`; the Makefile
+# installs pinned versions of buf and of both plugins into ./bin, and the CI
+# proto job fails if the committed code in gen/ differs from a fresh run.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt: paths=source_relative

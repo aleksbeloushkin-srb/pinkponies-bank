@@ -1,0 +1,11 @@
+# buf configuration: the module root is api/proto, so imports and the
+# generated paths start at ledger/v1.
+version: v2
+modules:
+  - path: api/proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

@@ -1,0 +1,230 @@
+syntax = "proto3";
+
+// The ledger of Pinkponies Bank: accounts, holds and a double-entry journal.
+//
+// Error model. Every failure is a gRPC status; business refusals carry a
+// google.rpc.ErrorInfo detail with domain "ledger.pinkponies-bank" and one
+// of the reasons below, so a client never parses messages:
+//
+//   InvalidArgument     a field is malformed (google.rpc.BadRequest detail),
+//                       or IDEMPOTENCY_KEY_REUSED: the key was used before
+//                       with a different request
+//   NotFound            ACCOUNT_NOT_FOUND, HOLD_NOT_FOUND
+//   FailedPrecondition  INSUFFICIENT_FUNDS, CURRENCY_MISMATCH,
+//                       HOLD_CAPTURED, HOLD_RELEASED, HOLD_EXPIRED
+//   AlreadyExists       a replay of an idempotency key: the original result
+//                       is attached as a detail (the response message of
+//                       the method), with current statuses
+//   Unavailable,        transient; the request may or may not have been
+//   DeadlineExceeded,   executed, so retry it with the same idempotency key
+//   Aborted
+//   Internal            a bug; retrying with the same key is still safe
+//
+// Every mutating method takes an idempotency_key. Calls with the same key
+// and the same request are executed once.
+package ledger.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/aleksbeloushkin-srb/pinkponies-bank/gen/ledger/v1;ledgerv1";
+
+// LedgerService keeps balances. It is the source of truth for money.
+service LedgerService {
+  // OpenAccount creates a customer account, funded from the bank's treasury
+  // when initial_deposit_minor is positive.
+  rpc OpenAccount(OpenAccountRequest) returns (OpenAccountResponse);
+  // GetAccount returns one account with its balances.
+  rpc GetAccount(GetAccountRequest) returns (GetAccountResponse);
+  // ListAccounts lists accounts in creation order.
+  rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
+  // PlaceHold reserves an amount on a source account for a transfer to a
+  // destination account. It fails with INSUFFICIENT_FUNDS when the source's
+  // available balance is too low.
+  rpc PlaceHold(PlaceHoldRequest) returns (PlaceHoldResponse);
+  // CaptureHold moves a held amount to the hold's destination as one
+  // balanced transaction.
+  rpc CaptureHold(CaptureHoldRequest) returns (CaptureHoldResponse);
+  // ReleaseHold gives a held amount back to the source account. Releasing a
+  // released hold, under any key, is a replay.
+  rpc ReleaseHold(ReleaseHoldRequest) returns (ReleaseHoldResponse);
+  // ListEntries lists an account's journal entries, oldest first.
+  rpc ListEntries(ListEntriesRequest) returns (ListEntriesResponse);
+}
+
+// AccountKind separates clients' accounts from the bank's own.
+enum AccountKind {
+  ACCOUNT_KIND_UNSPECIFIED = 0;
+  // A client's account; its available balance never goes below zero.
+  ACCOUNT_KIND_CUSTOMER = 1;
+  // A treasury account, one per currency; deposits make it negative.
+  ACCOUNT_KIND_SYSTEM = 2;
+}
+
+// Account holds money in one currency. Amounts are integers in minor units.
+message Account {
+  string id = 1;
+  string name = 2;
+  // ISO 4217 code, for example "EUR".
+  string currency = 3;
+  AccountKind kind = 4;
+  // Sum of the account's journal entries.
+  int64 posted_minor = 5;
+  // Sum of the account's active holds.
+  int64 held_minor = 6;
+  // posted_minor minus held_minor.
+  int64 available_minor = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// HoldStatus is the lifecycle state of a hold.
+enum HoldStatus {
+  HOLD_STATUS_UNSPECIFIED = 0;
+  HOLD_STATUS_ACTIVE = 1;
+  HOLD_STATUS_CAPTURED = 2;
+  HOLD_STATUS_RELEASED = 3;
+}
+
+// Hold reserves money on a source account for one transfer.
+message Hold {
+  string id = 1;
+  string account_id = 2;
+  string destination_account_id = 3;
+  int64 amount_minor = 4;
+  string currency = 5;
+  HoldStatus status = 6;
+  // Set when released: the client's reason, or "expired".
+  string release_reason = 7;
+  // Set when captured.
+  string transaction_id = 8;
+  google.protobuf.Timestamp expires_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+// TransactionKind says why money moved.
+enum TransactionKind {
+  TRANSACTION_KIND_UNSPECIFIED = 0;
+  // Funding of a new account from the treasury.
+  TRANSACTION_KIND_DEPOSIT = 1;
+  // A captured hold.
+  TRANSACTION_KIND_TRANSFER = 2;
+}
+
+// Entry is one line of the journal.
+message Entry {
+  int64 id = 1;
+  string transaction_id = 2;
+  string account_id = 3;
+  // Negative takes money from the account, positive adds it.
+  int64 amount_minor = 4;
+  // The account's posted balance after this entry.
+  int64 balance_after_minor = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// Transaction is one balanced posting: its entries sum to zero.
+message Transaction {
+  string id = 1;
+  TransactionKind kind = 2;
+  // The captured hold of a transfer; empty for a deposit.
+  string hold_id = 3;
+  string currency = 4;
+  repeated Entry entries = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// OpenAccountRequest opens a customer account.
+message OpenAccountRequest {
+  string idempotency_key = 1;
+  string name = 2;
+  string currency = 3;
+  int64 initial_deposit_minor = 4;
+}
+
+// OpenAccountResponse is the new account.
+message OpenAccountResponse {
+  Account account = 1;
+}
+
+// GetAccountRequest names one account.
+message GetAccountRequest {
+  string account_id = 1;
+}
+
+// GetAccountResponse is the account.
+message GetAccountResponse {
+  Account account = 1;
+}
+
+// ListAccountsRequest asks for one page of accounts.
+message ListAccountsRequest {
+  // At most this many accounts; 0 means 50, the maximum is 500.
+  int32 page_size = 1;
+  // The next_page_token of the previous page, empty for the first.
+  string page_token = 2;
+}
+
+// ListAccountsResponse is one page of accounts.
+message ListAccountsResponse {
+  repeated Account accounts = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+// PlaceHoldRequest reserves money for a transfer.
+message PlaceHoldRequest {
+  string idempotency_key = 1;
+  string account_id = 2;
+  string destination_account_id = 3;
+  int64 amount_minor = 4;
+  string currency = 5;
+  // How long the hold may stay active; unset means the ledger's default.
+  // It is not part of the request identity: a replay keeps the original
+  // expiry.
+  google.protobuf.Duration ttl = 6;
+}
+
+// PlaceHoldResponse is the hold.
+message PlaceHoldResponse {
+  Hold hold = 1;
+}
+
+// CaptureHoldRequest captures a hold.
+message CaptureHoldRequest {
+  string idempotency_key = 1;
+  string hold_id = 2;
+}
+
+// CaptureHoldResponse is the captured hold and the transaction.
+message CaptureHoldResponse {
+  Hold hold = 1;
+  Transaction transaction = 2;
+}
+
+// ReleaseHoldRequest releases a hold.
+message ReleaseHoldRequest {
+  string idempotency_key = 1;
+  string hold_id = 2;
+  // Recorded with the hold; at most 200 characters.
+  string reason = 3;
+}
+
+// ReleaseHoldResponse is the released hold.
+message ReleaseHoldResponse {
+  Hold hold = 1;
+}
+
+// ListEntriesRequest asks for one page of an account's entries.
+message ListEntriesRequest {
+  string account_id = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+// ListEntriesResponse is one page of entries.
+message ListEntriesResponse {
+  repeated Entry entries = 1;
+  string next_page_token = 2;
+}

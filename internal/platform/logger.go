@@ -2,8 +2,10 @@ package platform
 
 import (
 	"context"
+	"crypto/rand"
 	"io"
 	"log/slog"
+	"regexp"
 )
 
 type requestIDKey struct{}
@@ -13,6 +15,15 @@ type requestIDKey struct{}
 func WithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, requestIDKey{}, id)
 }
+
+var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// ValidRequestID reports whether an incoming request id may be kept: short,
+// and made of characters that are safe in logs and headers.
+func ValidRequestID(id string) bool { return validRequestID.MatchString(id) }
+
+// NewRequestID returns a fresh random request id.
+func NewRequestID() string { return rand.Text() }
 
 // RequestID returns the request id carried by ctx, or "".
 func RequestID(ctx context.Context) string {
