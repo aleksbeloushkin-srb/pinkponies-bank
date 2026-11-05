@@ -10,6 +10,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/httpserver"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/app"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/longpoll"
 )
@@ -26,3 +27,5 @@ func newBatcher(e *sagaEnv) *longpoll.Batcher {
 func appCreate(e *sagaEnv, key string, amount int64) app.CreateTransferRequest {
 	return app.CreateTransferRequest{IdempotencyKey: key, SourceAccountID: e.src, DestinationAccountID: e.dst, AmountMinor: amount, Currency: "EUR"}
 }
+
+func httpserverMetrics() *httpserver.Metrics { return httpserver.NewMetrics(prometheus.NewRegistry()) }

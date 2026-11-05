@@ -1,0 +1,108 @@
+openapi: 3.1.0
+info:
+  title: Pinkponies Bank notifications API
+  version: 1.0.0
+  description: |
+    An account's notifications, created from the transfers.events topic
+    (api/events/v1) once per event, with the state of their delivery on
+    each channel. Readable from the transfers web UI through CORS.
+
+    In development the service also serves a fake webhook receiver under
+    /_sink (NOTIFICATIONS_SINK_ENABLED); it is not part of this contract.
+servers:
+  - url: http://localhost:8081
+paths:
+  /v1/notifications:
+    get:
+      operationId: listNotifications
+      summary: An account's notifications, newest first
+      parameters:
+        - name: account
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          description: At most this many; default 50, at most 200.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: The notifications.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications]
+                properties:
+                  notifications:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+        '400':
+          $ref: '#/components/responses/Error'
+components:
+  responses:
+    Error:
+      description: An error.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, message]
+            properties:
+              code:
+                type: string
+                enum: [invalid_argument, internal]
+              message:
+                type: string
+              field:
+                type: string
+  schemas:
+    Notification:
+      type: object
+      required: [id, event_id, account_id, transfer_id, kind, message, created_at, deliveries]
+      properties:
+        id:
+          type: string
+          format: uuid
+        event_id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        transfer_id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [transfer_accepted, transfer_sent, transfer_received, transfer_rejected, transfer_canceled]
+        message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        deliveries:
+          type: array
+          items:
+            type: object
+            required: [channel, state, attempts]
+            properties:
+              channel:
+                type: string
+                enum: [log, webhook]
+              state:
+                type: string
+                enum: [pending, delivered, failed]
+              attempts:
+                type: integer
+              last_error:
+                type: string
+              delivered_at:
+                type: string
+                format: date-time

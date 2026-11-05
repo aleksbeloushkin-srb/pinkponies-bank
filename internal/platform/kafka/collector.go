@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -75,35 +76,26 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 }
 
 func (c *Collector) read(ctx context.Context) (lags, sizes map[string]int64, err error) {
-	described, err := c.adm.Lag(ctx, c.group)
+	committed, err := c.adm.FetchOffsets(ctx, c.group)
 	if err != nil {
-		return nil, nil, fmt.Errorf("lag: %w", err)
+		return nil, nil, fmt.Errorf("committed offsets of %s: %w", c.group, err)
 	}
-	lags = map[string]int64{}
-	if g, ok := described[c.group]; ok {
-		if err := g.Error(); err != nil {
-			return nil, nil, fmt.Errorf("lag of %s: %w", c.group, err)
-		}
-		for topic, l := range g.Lag.TotalByTopic() {
-			lags[topic] = l.Lag
-		}
-	}
-
-	start, err := c.adm.ListStartOffsets(ctx, c.sized...)
+	topics := append(slices.Clone(c.consumed), c.sized...)
+	start, err := c.adm.ListStartOffsets(ctx, topics...)
 	if err == nil {
 		err = start.Error()
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("start offsets: %w", err)
 	}
-	end, err := c.adm.ListEndOffsets(ctx, c.sized...)
+	end, err := c.adm.ListEndOffsets(ctx, topics...)
 	if err == nil {
 		err = end.Error()
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("end offsets: %w", err)
 	}
-	sizes = map[string]int64{}
+	var partitions []partitionOffsets
 	var errs []error
 	end.Each(func(o kadm.ListedOffset) {
 		s, ok := start.Lookup(o.Topic, o.Partition)
@@ -111,7 +103,45 @@ func (c *Collector) read(ctx context.Context) (lags, sizes map[string]int64, err
 			errs = append(errs, fmt.Errorf("no start offset for %s/%d", o.Topic, o.Partition))
 			return
 		}
-		sizes[o.Topic] += max(o.Offset-s.Offset, 0)
+		p := partitionOffsets{topic: o.Topic, start: s.Offset, end: o.Offset, committed: -1}
+		if r, ok := committed.Lookup(o.Topic, o.Partition); ok {
+			if r.Err != nil {
+				errs = append(errs, fmt.Errorf("committed offset of %s/%d: %w", o.Topic, o.Partition, r.Err))
+				return
+			}
+			p.committed = r.At
+		}
+		partitions = append(partitions, p)
 	})
-	return lags, sizes, errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return nil, nil, err
+	}
+	lags, sizes = summarize(partitions)
+	return lags, sizes, nil
+}
+
+// partitionOffsets are the offsets of one partition; committed is -1 when
+// the group never committed it.
+type partitionOffsets struct {
+	topic                 string
+	start, end, committed int64
+}
+
+// summarize sums lag and size per topic. The lag of a partition is what
+// lies between the group's commit and the end; without a commit, between
+// the start and the end, because a new group starts from the beginning.
+// kadm's own Lag skips partitions without a commit when the group has no
+// members, which is exactly when the consumer is down: computing it here
+// keeps that case visible.
+func summarize(partitions []partitionOffsets) (lags, sizes map[string]int64) {
+	lags, sizes = map[string]int64{}, map[string]int64{}
+	for _, p := range partitions {
+		from := p.start
+		if p.committed >= 0 {
+			from = max(p.committed, p.start)
+		}
+		lags[p.topic] += max(p.end-from, 0)
+		sizes[p.topic] += max(p.end-p.start, 0)
+	}
+	return lags, sizes
 }

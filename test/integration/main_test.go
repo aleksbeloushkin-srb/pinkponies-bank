@@ -20,6 +20,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/redpanda"
 
 	ledgermigrations "github.com/aleksbeloushkin-srb/pinkponies-bank/internal/ledger/migrations"
+	notificationsmigrations "github.com/aleksbeloushkin-srb/pinkponies-bank/internal/notifications/migrations"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/pgdb"
 	transfersmigrations "github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/migrations"
 )
@@ -27,7 +28,7 @@ import (
 // Pools of the service databases, shared by all tests. Each test resets the
 // tables it uses first, so the tests of this package must not run in
 // parallel.
-var ledgerDB, transfersDB *pgxpool.Pool
+var ledgerDB, transfersDB, notificationsDB *pgxpool.Pool
 
 // kafkaBrokers is the seed broker of the shared Redpanda. Each test creates
 // its own topics, so tests never see each other's records.
@@ -85,7 +86,7 @@ func runTests(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	for _, db := range []string{"ledger", "transfers"} {
+	for _, db := range []string{"ledger", "transfers", "notifications"} {
 		if _, err := admin.Exec(ctx, "CREATE DATABASE "+db); err != nil {
 			fmt.Fprintln(os.Stderr, "create database:", err)
 			return 1
@@ -103,6 +104,11 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 	defer transfersDB.Close()
+	if notificationsDB, err = connect(ctx, dsn, "notifications", notificationsmigrations.FS); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer notificationsDB.Close()
 	return m.Run()
 }
 
