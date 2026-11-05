@@ -1,0 +1,160 @@
+# The local stack of Pinkponies Bank:
+#   docker compose up --build      then open http://localhost:8080
+#
+# PostgreSQL (one database per service), Redpanda (Kafka API), the three
+# services, the fake screening provider and Prometheus. The secrets below
+# are development values; never reuse them anywhere else. If image builds
+# stall on a VM-based Docker, see "Troubleshooting" in the README.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres-dev-only
+    volumes:
+      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      # Over TCP: during the first start the init script runs on a server
+      # that listens on the socket only, and must not count as ready.
+      test: ["CMD-SHELL", "PGPASSWORD=$$POSTGRES_PASSWORD psql -h 127.0.0.1 -U postgres -tAc 'SELECT 1' notifications"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.2.4
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --overprovisioned
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092" # Kafka API for tools on the host
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -Eq 'Healthy:.+true'"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  # Topics are infrastructure, not something a service creates as a side
+  # effect: three partitions keyed by transfer id, one for dead letters.
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.2.4
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for spec in transfers.events:3 transfers.events.dlq:1; do
+          topic=$${spec%%:*}; partitions=$${spec##*:}
+          rpk topic create "$$topic" -p "$$partitions" -r 1 -X brokers=redpanda:9092 ||
+            rpk topic describe "$$topic" -X brokers=redpanda:9092 >/dev/null
+        done
+
+  ledger:
+    build: { context: ., target: ledger }
+    image: pinkponies-bank/ledger:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LEDGER_DATABASE_URL: postgres://ledger:ledger-dev-only@postgres:5432/ledger?sslmode=disable
+      LEDGER_SEED_FILE: /etc/ledger/accounts.json
+    volumes:
+      - ./deploy/ledger/accounts.json:/etc/ledger/accounts.json:ro
+    ports:
+      - "50051:50051" # gRPC, for grpcurl and friends
+      - "9101:9101"   # admin: /metrics, /healthz, /readyz
+    healthcheck:
+      test: ["CMD", "/ledger", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  fakerisk:
+    build: { context: ., target: fakerisk }
+    image: pinkponies-bank/fakerisk:dev
+    environment:
+      FAKERISK_REVIEW_DELAY: ${FAKERISK_REVIEW_DELAY:-3s}
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "/fakerisk", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  transfers:
+    build: { context: ., target: transfers }
+    image: pinkponies-bank/transfers:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ledger:
+        condition: service_healthy
+      fakerisk:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      TRANSFERS_DATABASE_URL: postgres://transfers:transfers-dev-only@postgres:5432/transfers?sslmode=disable
+      TRANSFERS_LEDGER_ADDR: dns:///ledger:50051
+      TRANSFERS_RISK_URL: http://fakerisk:8090
+      TRANSFERS_KAFKA_BROKERS: redpanda:9092
+      # The notifications API as the browser on the host reaches it.
+      TRANSFERS_UI_NOTIFICATIONS_URL: http://localhost:8081
+    ports:
+      - "8080:8080"
+      - "9100:9100"
+    healthcheck:
+      test: ["CMD", "/transfers", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    # Drain pause + HTTP drain + the longest running saga step must fit.
+    stop_grace_period: 40s
+
+  notifications:
+    build: { context: ., target: notifications }
+    image: pinkponies-bank/notifications:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      NOTIFICATIONS_DATABASE_URL: postgres://notifications:notifications-dev-only@postgres:5432/notifications?sslmode=disable
+      NOTIFICATIONS_KAFKA_BROKERS: redpanda:9092
+      # The webhook channel posts to the fake receiver in this same process.
+      NOTIFICATIONS_WEBHOOK_URL: http://localhost:8081/_sink/webhooks
+      NOTIFICATIONS_SINK_ENABLED: "true"
+      NOTIFICATIONS_CORS_ORIGINS: http://localhost:8080
+    ports:
+      - "8081:8081"
+      - "9102:9102"
+    healthcheck:
+      test: ["CMD", "/notifications", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 30s
+
+  # Scrapes the admin listeners and evaluates deploy/prometheus/alerts.yml.
+  # UI: http://localhost:9091 (the alerts are at /alerts).
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    depends_on:
+      transfers:
+        condition: service_healthy
+      notifications:
+        condition: service_healthy
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+    ports:
+      - "9091:9090"

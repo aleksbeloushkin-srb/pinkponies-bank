@@ -1,0 +1,111 @@
+# Alert rules of Pinkponies Bank. docs/OBSERVABILITY.md explains each rule
+# and the first thing to check when it fires.
+#
+# Gauges read from a database or from the brokers (transfer_*, outbox_*,
+# tasks_*, ledger_*, kafka_*) describe shared state and are exported
+# identically by every instance of a service, so they are aggregated with
+# max(), never sum().
+groups:
+  - name: transfers-saga
+    rules:
+      - alert: SagaStuck
+        expr: max(transfer_oldest_in_flight_seconds) > 600
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "A transfer has not reached a final status for more than ten minutes"
+          runbook: "Find the oldest pending or held transfer and its saga_steps row left running or waiting; check tasks_dead and the ledger and screening dependencies."
+      - alert: DeadTasks
+        expr: max by (job, kind) (tasks_dead) > 0
+        for: 1m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Dead {{ $labels.kind }} tasks in {{ $labels.job }} wait for an operator"
+          runbook: "Read last_error of the dead tasks, fix the cause, then set them back to ready. A dead saga step leaves its transfer pending or held; its hold expires on its own."
+      - alert: OutboxLag
+        expr: max(outbox_oldest_unpublished_seconds) > 60
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Transfer events are more than a minute old and unpublished"
+          runbook: "Check that the relay runs and outbox_failed_total; Kafka may be unreachable. Events are kept and published once it is back."
+      - alert: ScreeningAmbiguousRatio
+        expr: |
+          sum(rate(screening_requests_total{outcome="ambiguous"}[10m]))
+            / sum(rate(screening_requests_total[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "More than 5% of screening calls end without a known outcome"
+          runbook: "Check the provider's latency and errors. Calls are retried with the same key; past SCREEN_MAX_FAILURES transfers are canceled and their holds released."
+      - alert: ScreeningMisconfigured
+        expr: sum(increase(screening_requests_total{outcome="misconfigured"}[5m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "The screening provider refuses our requests or credentials"
+          runbook: "Check TRANSFERS_RISK_URL and the provider credentials; affected transfers are canceled after their retries."
+
+  - name: ledger
+    rules:
+      - alert: HoldLeak
+        expr: max(ledger_hold_oldest_active_seconds) > 900
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "A hold has been active for more than fifteen minutes"
+          runbook: "A transfer that holds money that long is stuck or forgot its hold: find the transfer by the hold's idempotency key. The expiry sweep releases the hold at its TTL."
+      - alert: LedgerOutOfBalance
+        expr: sum by (currency) (max by (currency, kind) (ledger_balance_sum_minor)) != 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Posted balances in {{ $labels.currency }} do not sum to zero"
+          runbook: "Money was created or destroyed: stop writes, compare accounts.posted_minor with the sum of entries per account, and find the transaction that broke it."
+
+  - name: notifications
+    rules:
+      - alert: DLQNotEmpty
+        expr: max(kafka_topic_messages{topic="transfers.events.dlq"}) > 0
+        for: 1m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Events wait in the dead-letter topic"
+          runbook: "Read the records and their dlq-error headers (rpk topic consume transfers.events.dlq), fix the producer or the consumer, replay what is valid, then delete the records."
+      - alert: ConsumerLag
+        expr: max by (group, topic) (kafka_consumer_group_lag) > 100
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Consumer group {{ $labels.group }} is more than 100 events behind on {{ $labels.topic }}"
+          runbook: "Check that the notifications service runs and consumer_retries_total{class=\"transient\"}: a failing database stalls the partition until it is back."
+
+  - name: platform
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} at {{ $labels.instance }} cannot be scraped"
+          runbook: "Check the container and its logs; its gauges are missing, so the alerts that read them are blind."
+      - alert: GaugesUnreadable
+        # One selector over the three counters: each service exports a
+        # different subset, and adding vectors would match no series.
+        expr: |
+          sum by (job) (increase({__name__=~"metrics_collect_errors_total|task_collect_errors_total|kafka_collect_errors_total"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.job }} cannot read its database or broker gauges"
+          runbook: "The gauges are omitted rather than stale, so the alerts on them cannot fire; check the database and the brokers from the service."

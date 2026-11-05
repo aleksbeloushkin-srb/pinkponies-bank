@@ -1,0 +1,96 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.24.x", "stable"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+      - name: gofmt
+        run: test -z "$(gofmt -s -l .)" || { gofmt -s -l .; exit 1; }
+      - name: vet
+        run: |
+          go vet ./...
+          go vet -tags integration ./...
+      - name: test
+        run: |
+          set -o pipefail
+          go test -race -count=1 -json ./... | go run ./scripts/testreport
+
+  integration:
+    name: integration (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.24.x", "stable"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+      - name: integration tests (testcontainers PostgreSQL and Redpanda)
+        run: |
+          set -o pipefail
+          go test -race -count=1 -timeout 20m -tags integration -json ./... | go run ./scripts/testreport
+
+  staticcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.x"
+      - run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+      - run: |
+          staticcheck -checks all ./...
+          staticcheck -checks all -tags integration ./...
+
+  proto:
+    name: proto (lint and drift)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.x"
+      - name: buf lint and format
+        run: make proto-lint
+      - name: generated code matches api/proto
+        run: make proto-check
+
+  alerts:
+    name: promtool
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: validate the Prometheus config and run the alert rule tests
+        run: make check-alerts
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: build the images and run the end-to-end script with docker compose
+        run: ./scripts/e2e.sh

@@ -1,0 +1,220 @@
+# Unit tests for alerts.yml: promtool test rules alerts_test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A saga older than ten minutes for five minutes pages once, even though
+  # two instances export the gauge.
+  - interval: 1m
+    input_series:
+      - series: 'transfer_oldest_in_flight_seconds{instance="a", job="transfers"}'
+        values: '500 560 620 680 740 800 860 920 980 1040'
+      - series: 'transfer_oldest_in_flight_seconds{instance="b", job="transfers"}'
+        values: '500 560 620 680 740 800 860 920 980 1040'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SagaStuck
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: SagaStuck
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "A transfer has not reached a final status for more than ten minutes"
+              runbook: "Find the oldest pending or held transfer and its saga_steps row left running or waiting; check tasks_dead and the ledger and screening dependencies."
+
+  - interval: 1m
+    input_series:
+      - series: 'tasks_dead{kind="capture", job="transfers", instance="a"}'
+        values: '0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DeadTasks
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: DeadTasks
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              kind: capture
+              job: transfers
+            exp_annotations:
+              summary: "Dead capture tasks in transfers wait for an operator"
+              runbook: "Read last_error of the dead tasks, fix the cause, then set them back to ready. A dead saga step leaves its transfer pending or held; its hold expires on its own."
+
+  - interval: 1m
+    input_series:
+      - series: 'outbox_oldest_unpublished_seconds{job="transfers"}'
+        values: '0 70 130 190 250 310 370 430'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: OutboxLag
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: OutboxLag
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "Transfer events are more than a minute old and unpublished"
+              runbook: "Check that the relay runs and outbox_failed_total; Kafka may be unreachable. Events are kept and published once it is back."
+
+  # 10 of 100 calls a minute end ambiguous: 10% for long enough pages; 1% does not.
+  - interval: 1m
+    input_series:
+      - series: 'screening_requests_total{outcome="approve", job="transfers"}'
+        values: '0+90x30'
+      - series: 'screening_requests_total{outcome="ambiguous", job="transfers"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ScreeningAmbiguousRatio
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "More than 5% of screening calls end without a known outcome"
+              runbook: "Check the provider's latency and errors. Calls are retried with the same key; past SCREEN_MAX_FAILURES transfers are canceled and their holds released."
+  - interval: 1m
+    input_series:
+      - series: 'screening_requests_total{outcome="approve", job="transfers"}'
+        values: '0+99x30'
+      - series: 'screening_requests_total{outcome="ambiguous", job="transfers"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ScreeningAmbiguousRatio
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'screening_requests_total{outcome="misconfigured", job="transfers"}'
+        values: '0 0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ScreeningMisconfigured
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ScreeningMisconfigured
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "The screening provider refuses our requests or credentials"
+              runbook: "Check TRANSFERS_RISK_URL and the provider credentials; affected transfers are canceled after their retries."
+
+  - interval: 1m
+    input_series:
+      - series: 'ledger_hold_oldest_active_seconds{job="ledger"}'
+        values: '800 860 920 980 1040 1100 1160 1220 1280'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HoldLeak
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: HoldLeak
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "A hold has been active for more than fifteen minutes"
+              runbook: "A transfer that holds money that long is stuck or forgot its hold: find the transfer by the hold's idempotency key. The expiry sweep releases the hold at its TTL."
+
+  # Customer and system balances cancel out per currency, also with two
+  # instances exporting them; a drift pages.
+  - interval: 1m
+    input_series:
+      - series: 'ledger_balance_sum_minor{currency="EUR", kind="customer", instance="a", job="ledger"}'
+        values: '1000 1000 1000 1001 1001 1001'
+      - series: 'ledger_balance_sum_minor{currency="EUR", kind="system", instance="a", job="ledger"}'
+        values: '-1000 -1000 -1000 -1000 -1000 -1000'
+      - series: 'ledger_balance_sum_minor{currency="EUR", kind="customer", instance="b", job="ledger"}'
+        values: '1000 1000 1000 1001 1001 1001'
+      - series: 'ledger_balance_sum_minor{currency="EUR", kind="system", instance="b", job="ledger"}'
+        values: '-1000 -1000 -1000 -1000 -1000 -1000'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: LedgerOutOfBalance
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: LedgerOutOfBalance
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              currency: EUR
+            exp_annotations:
+              summary: "Posted balances in EUR do not sum to zero"
+              runbook: "Money was created or destroyed: stop writes, compare accounts.posted_minor with the sum of entries per account, and find the transaction that broke it."
+
+  - interval: 1m
+    input_series:
+      - series: 'kafka_topic_messages{topic="transfers.events.dlq", job="notifications"}'
+        values: '0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DLQNotEmpty
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: DLQNotEmpty
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+            exp_annotations:
+              summary: "Events wait in the dead-letter topic"
+              runbook: "Read the records and their dlq-error headers (rpk topic consume transfers.events.dlq), fix the producer or the consumer, replay what is valid, then delete the records."
+
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumer_group_lag{group="notifications", topic="transfers.events", job="notifications"}'
+        values: '0 50 150 250 350 450 550 650 750'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ConsumerLag
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ConsumerLag
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              group: notifications
+              topic: transfers.events
+            exp_annotations:
+              summary: "Consumer group notifications is more than 100 events behind on transfers.events"
+              runbook: "Check that the notifications service runs and consumer_retries_total{class=\"transient\"}: a failing database stalls the partition until it is back."
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="ledger", instance="ledger:9101"}'
+        values: '1 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: ledger
+              instance: ledger:9101
+            exp_annotations:
+              summary: "ledger at ledger:9101 cannot be scraped"
+              runbook: "Check the container and its logs; its gauges are missing, so the alerts that read them are blind."
+
+  - interval: 1m
+    input_series:
+      # The ledger exports only one of the three counters.
+      - series: 'metrics_collect_errors_total{job="ledger"}'
+        values: '0+1x10'
+      - series: 'task_collect_errors_total{job="transfers"}'
+        values: '0+0x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: GaugesUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              job: ledger
+            exp_annotations:
+              summary: "ledger cannot read its database or broker gauges"
+              runbook: "The gauges are omitted rather than stale, so the alerts on them cannot fire; check the database and the brokers from the service."

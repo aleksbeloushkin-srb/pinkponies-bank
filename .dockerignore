@@ -1,0 +1,11 @@
+.git
+.github
+bin
+dist
+docs
+scripts
+test
+*.md
+Makefile
+docker-compose.yml
+compose.override.yaml
