@@ -25,14 +25,17 @@ import (
 
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/httpserver"
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/kafka"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/pgdb"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/taskqueue"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/app"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/httpapi"
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/kafkapub"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/ledgerclient"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/longpoll"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/metrics"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/migrations"
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/outbox"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/postgres"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/riskclient"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/pkg/txctx"
@@ -78,9 +81,12 @@ func main() {
 //  2. a short pause lets the readiness change propagate;
 //  3. the API server drains in-flight requests (long polls are released
 //     at once by closing the waiter registry);
-//  4. background components stop: the worker finishes its running steps;
+//  4. background components stop: the worker finishes its running steps,
+//     the relay its current batch;
 //  5. the admin listener (metrics, probes) stops;
-//  6. the ledger connection and then the database pool close (deferred).
+//  6. the Kafka client closes (the relay produces synchronously, so nothing
+//     is left in its buffers), then the ledger connection and the database
+//     pool close (deferred, in that order).
 func run(ctx context.Context, stopSignals context.CancelFunc, cfg config, log *slog.Logger) error {
 	pool, err := pgdb.Open(ctx, pgdb.Config{
 		URL:              cfg.DatabaseURL,
@@ -118,7 +124,7 @@ func run(ctx context.Context, stopSignals context.CancelFunc, cfg config, log *s
 	tx := txctx.New(pool)
 	store := postgres.NewTransfers(tx)
 	tasks := taskqueue.NewPostgres(tx)
-	outbox := postgres.NewOutbox(tx)
+	events := postgres.NewOutbox(tx)
 
 	conn, err := ledgerclient.Dial(cfg.LedgerAddr, ledgerclient.NewMetrics(reg))
 	if err != nil {
@@ -139,7 +145,7 @@ func run(ctx context.Context, stopSignals context.CancelFunc, cfg config, log *s
 		Tx:        tx,
 		Transfers: store,
 		Tasks:     tasks,
-		Events:    outbox,
+		Events:    events,
 		Ledger:    ledger,
 		Screener:  screener,
 		Watcher:   waiters,
@@ -179,6 +185,23 @@ func run(ctx context.Context, stopSignals context.CancelFunc, cfg config, log *s
 		})
 		bg.Go("saga-worker", w.Run)
 		stopClaiming = w.StopClaiming
+	}
+	if cfg.Roles.Relay {
+		// The relay does not wait for Kafka at start: the outbox absorbs a
+		// broker outage, and the relay catches up once it is back.
+		cl, err := kafka.NewClient(kafka.Config{Brokers: cfg.KafkaBrokers, ClientID: "transfers-relay"}, log,
+			kafkapub.ProducerOptions(cfg.PublishTimeout)...)
+		if err != nil {
+			return errors.Join(err, bg.Stop())
+		}
+		defer cl.Close()
+		relay := outbox.NewRelay(events, kafkapub.New(cl, cfg.KafkaTopic), clock, events.Ready(), outbox.NewMetrics(reg), outbox.Config{
+			Interval:       cfg.RelayInterval,
+			Batch:          cfg.RelayBatch,
+			Lease:          cfg.RelayLease,
+			PublishTimeout: cfg.PublishTimeout,
+		}, log)
+		bg.Go("outbox-relay", relay.Run)
 	}
 
 	// HTTP. The admin listener runs in every role; the API only with the

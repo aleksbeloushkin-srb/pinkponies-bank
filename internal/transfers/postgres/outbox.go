@@ -7,22 +7,11 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/uuid"
-
 	eventsv1 "github.com/aleksbeloushkin-srb/pinkponies-bank/api/events/v1"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers"
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/outbox"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/pkg/txctx"
 )
-
-// OutboxRecord is a stored event waiting to be published.
-type OutboxRecord struct {
-	ID          int64
-	EventID     uuid.UUID
-	AggregateID uuid.UUID
-	Type        string
-	Payload     []byte
-	CreatedAt   time.Time
-}
 
 // Outbox stores integration events next to the data they describe.
 type Outbox struct {
@@ -92,7 +81,7 @@ func toContract(e transfers.Event) eventsv1.TransferEvent {
 // lock while it publishes. Concurrent relays skip each other's rows, and an
 // event whose lease expired (a relay crashed mid-batch) can be claimed
 // again, which makes delivery at least once.
-func (o *Outbox) Claim(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]OutboxRecord, error) {
+func (o *Outbox) Claim(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]outbox.Record, error) {
 	rows, err := o.tx.DB(ctx).Query(ctx, `
 		WITH batch AS MATERIALIZED (
 			SELECT id FROM outbox
@@ -113,9 +102,9 @@ func (o *Outbox) Claim(ctx context.Context, now time.Time, limit int, lease time
 	}
 	defer rows.Close()
 
-	var out []OutboxRecord
+	var out []outbox.Record
 	for rows.Next() {
-		var r OutboxRecord
+		var r outbox.Record
 		if err := rows.Scan(&r.ID, &r.EventID, &r.AggregateID, &r.Type, &r.Payload, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan outbox: %w", err)
 		}
@@ -125,7 +114,7 @@ func (o *Outbox) Claim(ctx context.Context, now time.Time, limit int, lease time
 		return nil, fmt.Errorf("claim outbox: %w", err)
 	}
 	// RETURNING has no defined order; publishing must follow the id order.
-	slices.SortFunc(out, func(a, b OutboxRecord) int { return cmp.Compare(a.ID, b.ID) })
+	slices.SortFunc(out, func(a, b outbox.Record) int { return cmp.Compare(a.ID, b.ID) })
 	return out, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"time"
 
+	eventsv1 "github.com/aleksbeloushkin-srb/pinkponies-bank/api/events/v1"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform"
 )
 
@@ -16,6 +17,7 @@ const envPrefix = "TRANSFERS_"
 type roles struct {
 	API    bool // REST API, long polling, web UI
 	Worker bool // saga steps from the task queue
+	Relay  bool // outbox to Kafka
 }
 
 // config is the full configuration of the transfers service.
@@ -66,6 +68,13 @@ type config struct {
 	WaitMaxWaiters    int
 	WaitBatchInterval time.Duration
 
+	KafkaBrokers   []string
+	KafkaTopic     string
+	RelayInterval  time.Duration
+	RelayBatch     int
+	RelayLease     time.Duration
+	PublishTimeout time.Duration
+
 	UINotificationsURL string
 }
 
@@ -75,7 +84,7 @@ func loadConfig(environ []string) (config, error) {
 		LogLevel: l.Level("LOG_LEVEL", slog.LevelInfo),
 		// One process runs everything locally; production scales the roles
 		// independently.
-		Roles: parseRoles(l, "api,worker"),
+		Roles: parseRoles(l, "api,worker,relay"),
 
 		HTTPAddr: l.String("HTTP_ADDR", ":8080"),
 		// Metrics and probes, for the cluster network only.
@@ -145,6 +154,18 @@ func loadConfig(environ []string) (config, error) {
 		// Five queries a second per instance, whatever the number of waiters.
 		WaitBatchInterval: l.Duration("WAIT_BATCH_INTERVAL", 200*time.Millisecond),
 
+		// Required for the relay role, for example redpanda:9092.
+		KafkaBrokers: l.List("KAFKA_BROKERS", ""),
+		KafkaTopic:   l.String("KAFKA_TOPIC", eventsv1.TopicTransfers),
+		// Commit hooks wake the local relay; this is the fallback cadence.
+		RelayInterval: l.Duration("RELAY_INTERVAL", 500*time.Millisecond),
+		RelayBatch:    l.Int("RELAY_BATCH", 50),
+		// Claimed events stay hidden from other relays this long; a delivery
+		// starts only if it can finish inside the lease.
+		RelayLease: l.Duration("RELAY_LEASE", time.Minute),
+		// A broker slower than this to acknowledge counts as failed.
+		PublishTimeout: l.Duration("PUBLISH_TIMEOUT", 5*time.Second),
+
 		// The notifications API as the browser sees it; empty hides the feed.
 		UINotificationsURL: l.String("UI_NOTIFICATIONS_URL", ""),
 	}
@@ -165,8 +186,10 @@ func parseRoles(l *platform.Loader, def string) roles {
 			r.API = true
 		case "worker":
 			r.Worker = true
+		case "relay":
+			r.Relay = true
 		default:
-			l.Fail("ROLES", fmt.Errorf("unknown role %q (want api, worker)", role))
+			l.Fail("ROLES", fmt.Errorf("unknown role %q (want api, worker, relay)", role))
 		}
 	}
 	return r
@@ -185,7 +208,8 @@ func (c config) validate() error {
 		"TASK_RETRY_BASE": c.TaskRetryBase, "TASK_RETRY_MAX": c.TaskRetryMax, "HOLD_TTL": c.HoldTTL,
 		"SCREEN_REVIEW_TIMEOUT": c.ScreenReviewTimeout, "SCREEN_POLL_MIN": c.ScreenPollMin,
 		"SCREEN_POLL_MAX": c.ScreenPollMax, "WAIT_TIMEOUT": c.WaitTimeout, "WAIT_READ_TIMEOUT": c.WaitReadTimeout,
-		"WAIT_BATCH_INTERVAL": c.WaitBatchInterval,
+		"WAIT_BATCH_INTERVAL": c.WaitBatchInterval, "RELAY_INTERVAL": c.RelayInterval, "RELAY_LEASE": c.RelayLease,
+		"PUBLISH_TIMEOUT": c.PublishTimeout,
 	})
 	ch.Check(c.ShutdownDrainDelay >= 0, "SHUTDOWN_DRAIN_DELAY must not be negative")
 	ch.Check(c.DatabaseURL != "", "DATABASE_URL is required")
@@ -195,6 +219,7 @@ func (c config) validate() error {
 	ch.Check(c.TaskMaxAttempts >= 1, "TASK_MAX_ATTEMPTS must be at least 1")
 	ch.Check(c.ScreenMaxFailures >= 1, "SCREEN_MAX_FAILURES must be at least 1")
 	ch.Check(c.WaitMaxWaiters >= 1, "WAIT_MAX_WAITERS must be at least 1")
+	ch.Check(c.RelayBatch >= 1, "RELAY_BATCH must be at least 1")
 	ch.Check(c.TaskRetryBase <= c.TaskRetryMax, "TASK_RETRY_BASE must not exceed TASK_RETRY_MAX")
 	ch.Check(c.ScreenPollMin <= c.ScreenPollMax, "SCREEN_POLL_MIN must not exceed SCREEN_POLL_MAX")
 	ch.Check(!c.Roles.API || c.AdminAddr != c.HTTPAddr, "ADMIN_ADDR must differ from HTTP_ADDR")
@@ -214,6 +239,12 @@ func (c config) validate() error {
 		"WORKER_CONCURRENCY must be at most DB_MAX_CONNS-3, leaving connections for the API and the batcher")
 	ch.Check(c.DBIdleInTxTimeout > c.DBStatementTimeout,
 		"DB_IDLE_IN_TX_TIMEOUT must exceed DB_STATEMENT_TIMEOUT")
+	ch.Check(c.RelayLease >= 2*c.PublishTimeout,
+		"RELAY_LEASE must be at least twice PUBLISH_TIMEOUT, or the relay publishes almost nothing per batch")
+	if c.Roles.Relay {
+		ch.Check(len(c.KafkaBrokers) > 0, "KAFKA_BROKERS is required when the relay role is on")
+		ch.Check(c.KafkaTopic != "", "KAFKA_TOPIC must not be empty")
+	}
 	if c.Roles.Worker {
 		ch.Check(validHTTPURL(c.RiskURL), "RISK_URL must be an http(s) URL when the worker role is on")
 	}

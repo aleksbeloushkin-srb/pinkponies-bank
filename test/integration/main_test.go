@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/modules/redpanda"
 
 	ledgermigrations "github.com/aleksbeloushkin-srb/pinkponies-bank/internal/ledger/migrations"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/pgdb"
@@ -28,12 +29,32 @@ import (
 // parallel.
 var ledgerDB, transfersDB *pgxpool.Pool
 
+// kafkaBrokers is the seed broker of the shared Redpanda. Each test creates
+// its own topics, so tests never see each other's records.
+var kafkaBrokers []string
+
+// redpandaImage is the image of the local stack and of CI.
+const redpandaImage = "docker.redpanda.com/redpandadata/redpanda:v25.2.4"
+
 func TestMain(m *testing.M) {
 	os.Exit(runTests(m))
 }
 
 func runTests(m *testing.M) int {
 	ctx := context.Background()
+	rp, err := redpanda.Run(ctx, redpandaImage)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "start redpanda:", err)
+		return 1
+	}
+	defer func() { _ = testcontainers.TerminateContainer(rp) }()
+	broker, err := rp.KafkaSeedBroker(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "redpanda broker:", err)
+		return 1
+	}
+	kafkaBrokers = []string{broker}
+
 	ctr, err := tcpostgres.Run(ctx, "postgres:16-alpine",
 		tcpostgres.WithDatabase("postgres"),
 		tcpostgres.WithUsername("postgres"),
