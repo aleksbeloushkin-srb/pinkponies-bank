@@ -1,6 +1,10 @@
 package main
 
-import "io/fs"
+import (
+	"io/fs"
 
-// staticUI returns the web UI; nil until the UI is added.
-func staticUI() fs.FS { return nil }
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/web"
+)
+
+// staticUI returns the embedded web UI.
+func staticUI() fs.FS { return web.FS }

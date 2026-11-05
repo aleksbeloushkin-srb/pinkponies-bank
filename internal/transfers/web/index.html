@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pinkponies Bank · transfers</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <a class="skip" href="#send-title">Skip to the transfer form</a>
+  <header class="site-header">
+    <img src="/logo.svg" alt="Pinkponies Bank" class="logo" width="340" height="96">
+    <p class="tagline">
+      <span aria-hidden="true">🦄</span>
+      Pinkponies Bank is a fictional bank. Every transfer below runs a real saga across three
+      services: the ledger holds the money, a screening provider looks at it, and only then do
+      the ponies gallop.
+    </p>
+  </header>
+
+  <main>
+    <section class="card" aria-labelledby="accounts-title">
+      <div class="section-head">
+        <h2 id="accounts-title">Accounts</h2>
+        <button type="button" class="secondary" id="refresh-accounts">Refresh</button>
+      </div>
+      <p class="hint">Posted is what the books say; available is posted minus money held for transfers in flight.</p>
+      <table class="accounts">
+        <caption class="visually-hidden">Customer accounts and their balances</caption>
+        <thead>
+          <tr><th scope="col">Account</th><th scope="col">Posted</th><th scope="col">Held</th><th scope="col">Available</th></tr>
+        </thead>
+        <tbody id="accounts"></tbody>
+      </table>
+      <p id="accounts-error" class="note" role="alert"></p>
+    </section>
+
+    <section class="card" aria-labelledby="send-title">
+      <h2 id="send-title">Send ponies</h2>
+      <form id="send-form" novalidate>
+        <label>From
+          <select name="source" required></select>
+        </label>
+        <label>To
+          <select name="destination" required></select>
+        </label>
+        <label>Amount
+          <input name="amount" value="12.50" inputmode="decimal" required autocomplete="off" aria-describedby="amount-hint">
+        </label>
+        <button type="submit">Send ponies</button>
+        <p class="hint" id="amount-hint">
+          The fake screening provider decides by the last two digits of the amount in minor units:
+          <strong>…66</strong> is declined (the hold is given back), <strong>…77</strong> goes to a
+          review and is then approved, <strong>…78</strong> is reviewed and then declined.
+          Send more than the available balance to see a refusal.
+        </p>
+        <p id="form-error" class="note" role="alert"></p>
+      </form>
+    </section>
+
+    <section aria-labelledby="transfers-title">
+      <h2 id="transfers-title">Transfers in this browser tab</h2>
+      <ol id="transfers" class="transfers"></ol>
+    </section>
+
+    <section class="card" aria-labelledby="feed-title" id="feed" hidden>
+      <div class="section-head">
+        <h2 id="feed-title">Notifications</h2>
+        <label class="inline">For
+          <select id="feed-account"></select>
+        </label>
+      </div>
+      <p class="hint">Read from the notifications service, which consumes the transfer events from Kafka.</p>
+      <ol id="notifications" class="notifications" aria-live="polite"></ol>
+      <p id="feed-error" class="note" role="alert"></p>
+    </section>
+  </main>
+
+  <footer>
+    Status updates arrive through <code>GET /v1/transfers/{id}/wait?version=N</code>.
+    Metrics are on the admin ports: transfers <code>:9100</code>, ledger <code>:9101</code>,
+    notifications <code>:9102</code>.
+  </footer>
+
+  <template id="transfer-template">
+    <li class="card transfer">
+      <div class="transfer-head">
+        <span class="amount"></span>
+        <span class="chip" data-role="status"></span>
+      </div>
+      <div class="meta"></div>
+      <p class="mood" aria-live="polite"></p>
+      <ol class="steps" aria-label="Saga steps"></ol>
+      <div class="actions">
+        <button type="button" class="secondary" data-action="replay">Replay same request</button>
+      </div>
+      <p class="note" aria-live="polite"></p>
+    </li>
+  </template>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
