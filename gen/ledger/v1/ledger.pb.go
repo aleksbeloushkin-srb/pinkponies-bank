@@ -7,8 +7,9 @@
 // The ledger of Pinkponies Bank: accounts, holds and a double-entry journal.
 //
 // Error model. Every failure is a gRPC status; business refusals carry a
-// google.rpc.ErrorInfo detail with domain "ledger.pinkponies-bank" and one
-// of the reasons below, so a client never parses messages:
+// google.rpc.ErrorInfo detail with domain "ledger.pinkponies-bank" and a
+// reason from the ErrorReason enum below, so a client never parses
+// messages:
 //
 //   InvalidArgument     a field is malformed (google.rpc.BadRequest detail),
 //                       or IDEMPOTENCY_KEY_REUSED: the key was used before
@@ -46,6 +47,81 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ErrorReason lists the reasons of google.rpc.ErrorInfo details. The value
+// names are the reason strings, as in the Google API design guide, so the
+// values are not prefixed with the enum name.
+type ErrorReason int32
+
+const (
+	ErrorReason_ERROR_REASON_UNSPECIFIED ErrorReason = 0
+	// The idempotency key was used before with a different request.
+	ErrorReason_IDEMPOTENCY_KEY_REUSED ErrorReason = 1
+	ErrorReason_ACCOUNT_NOT_FOUND      ErrorReason = 2
+	ErrorReason_HOLD_NOT_FOUND         ErrorReason = 3
+	// The source's available balance is below the amount.
+	ErrorReason_INSUFFICIENT_FUNDS ErrorReason = 4
+	ErrorReason_CURRENCY_MISMATCH  ErrorReason = 5
+	// The hold was captured; it cannot be captured again or released.
+	ErrorReason_HOLD_CAPTURED ErrorReason = 6
+	// The hold was released, on request or by the expiry sweep.
+	ErrorReason_HOLD_RELEASED ErrorReason = 7
+	// The hold is past its expiry and cannot be captured.
+	ErrorReason_HOLD_EXPIRED ErrorReason = 8
+)
+
+// Enum value maps for ErrorReason.
+var (
+	ErrorReason_name = map[int32]string{
+		0: "ERROR_REASON_UNSPECIFIED",
+		1: "IDEMPOTENCY_KEY_REUSED",
+		2: "ACCOUNT_NOT_FOUND",
+		3: "HOLD_NOT_FOUND",
+		4: "INSUFFICIENT_FUNDS",
+		5: "CURRENCY_MISMATCH",
+		6: "HOLD_CAPTURED",
+		7: "HOLD_RELEASED",
+		8: "HOLD_EXPIRED",
+	}
+	ErrorReason_value = map[string]int32{
+		"ERROR_REASON_UNSPECIFIED": 0,
+		"IDEMPOTENCY_KEY_REUSED":   1,
+		"ACCOUNT_NOT_FOUND":        2,
+		"HOLD_NOT_FOUND":           3,
+		"INSUFFICIENT_FUNDS":       4,
+		"CURRENCY_MISMATCH":        5,
+		"HOLD_CAPTURED":            6,
+		"HOLD_RELEASED":            7,
+		"HOLD_EXPIRED":             8,
+	}
+)
+
+func (x ErrorReason) Enum() *ErrorReason {
+	p := new(ErrorReason)
+	*p = x
+	return p
+}
+
+func (x ErrorReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ErrorReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_ledger_v1_ledger_proto_enumTypes[0].Descriptor()
+}
+
+func (ErrorReason) Type() protoreflect.EnumType {
+	return &file_ledger_v1_ledger_proto_enumTypes[0]
+}
+
+func (x ErrorReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ErrorReason.Descriptor instead.
+func (ErrorReason) EnumDescriptor() ([]byte, []int) {
+	return file_ledger_v1_ledger_proto_rawDescGZIP(), []int{0}
+}
+
 // AccountKind separates clients' accounts from the bank's own.
 type AccountKind int32
 
@@ -82,11 +158,11 @@ func (x AccountKind) String() string {
 }
 
 func (AccountKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_ledger_v1_ledger_proto_enumTypes[0].Descriptor()
+	return file_ledger_v1_ledger_proto_enumTypes[1].Descriptor()
 }
 
 func (AccountKind) Type() protoreflect.EnumType {
-	return &file_ledger_v1_ledger_proto_enumTypes[0]
+	return &file_ledger_v1_ledger_proto_enumTypes[1]
 }
 
 func (x AccountKind) Number() protoreflect.EnumNumber {
@@ -95,7 +171,7 @@ func (x AccountKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AccountKind.Descriptor instead.
 func (AccountKind) EnumDescriptor() ([]byte, []int) {
-	return file_ledger_v1_ledger_proto_rawDescGZIP(), []int{0}
+	return file_ledger_v1_ledger_proto_rawDescGZIP(), []int{1}
 }
 
 // HoldStatus is the lifecycle state of a hold.
@@ -135,11 +211,11 @@ func (x HoldStatus) String() string {
 }
 
 func (HoldStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_ledger_v1_ledger_proto_enumTypes[1].Descriptor()
+	return file_ledger_v1_ledger_proto_enumTypes[2].Descriptor()
 }
 
 func (HoldStatus) Type() protoreflect.EnumType {
-	return &file_ledger_v1_ledger_proto_enumTypes[1]
+	return &file_ledger_v1_ledger_proto_enumTypes[2]
 }
 
 func (x HoldStatus) Number() protoreflect.EnumNumber {
@@ -148,7 +224,7 @@ func (x HoldStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HoldStatus.Descriptor instead.
 func (HoldStatus) EnumDescriptor() ([]byte, []int) {
-	return file_ledger_v1_ledger_proto_rawDescGZIP(), []int{1}
+	return file_ledger_v1_ledger_proto_rawDescGZIP(), []int{2}
 }
 
 // TransactionKind says why money moved.
@@ -187,11 +263,11 @@ func (x TransactionKind) String() string {
 }
 
 func (TransactionKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_ledger_v1_ledger_proto_enumTypes[2].Descriptor()
+	return file_ledger_v1_ledger_proto_enumTypes[3].Descriptor()
 }
 
 func (TransactionKind) Type() protoreflect.EnumType {
-	return &file_ledger_v1_ledger_proto_enumTypes[2]
+	return &file_ledger_v1_ledger_proto_enumTypes[3]
 }
 
 func (x TransactionKind) Number() protoreflect.EnumNumber {
@@ -200,7 +276,7 @@ func (x TransactionKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TransactionKind.Descriptor instead.
 func (TransactionKind) EnumDescriptor() ([]byte, []int) {
-	return file_ledger_v1_ledger_proto_rawDescGZIP(), []int{2}
+	return file_ledger_v1_ledger_proto_rawDescGZIP(), []int{3}
 }
 
 // Account holds money in one currency. Amounts are integers in minor units.
@@ -1490,7 +1566,17 @@ const file_ledger_v1_ledger_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"i\n" +
 	"\x13ListEntriesResponse\x12*\n" +
 	"\aentries\x18\x01 \x03(\v2\x10.ledger.v1.EntryR\aentries\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*_\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*\xd9\x01\n" +
+	"\vErrorReason\x12\x1c\n" +
+	"\x18ERROR_REASON_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16IDEMPOTENCY_KEY_REUSED\x10\x01\x12\x15\n" +
+	"\x11ACCOUNT_NOT_FOUND\x10\x02\x12\x12\n" +
+	"\x0eHOLD_NOT_FOUND\x10\x03\x12\x16\n" +
+	"\x12INSUFFICIENT_FUNDS\x10\x04\x12\x15\n" +
+	"\x11CURRENCY_MISMATCH\x10\x05\x12\x11\n" +
+	"\rHOLD_CAPTURED\x10\x06\x12\x11\n" +
+	"\rHOLD_RELEASED\x10\a\x12\x10\n" +
+	"\fHOLD_EXPIRED\x10\b*_\n" +
 	"\vAccountKind\x12\x1c\n" +
 	"\x18ACCOUNT_KIND_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15ACCOUNT_KIND_CUSTOMER\x10\x01\x12\x17\n" +
@@ -1527,68 +1613,69 @@ func file_ledger_v1_ledger_proto_rawDescGZIP() []byte {
 	return file_ledger_v1_ledger_proto_rawDescData
 }
 
-var file_ledger_v1_ledger_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_ledger_v1_ledger_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_ledger_v1_ledger_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_ledger_v1_ledger_proto_goTypes = []any{
-	(AccountKind)(0),              // 0: ledger.v1.AccountKind
-	(HoldStatus)(0),               // 1: ledger.v1.HoldStatus
-	(TransactionKind)(0),          // 2: ledger.v1.TransactionKind
-	(*Account)(nil),               // 3: ledger.v1.Account
-	(*Hold)(nil),                  // 4: ledger.v1.Hold
-	(*Entry)(nil),                 // 5: ledger.v1.Entry
-	(*Transaction)(nil),           // 6: ledger.v1.Transaction
-	(*OpenAccountRequest)(nil),    // 7: ledger.v1.OpenAccountRequest
-	(*OpenAccountResponse)(nil),   // 8: ledger.v1.OpenAccountResponse
-	(*GetAccountRequest)(nil),     // 9: ledger.v1.GetAccountRequest
-	(*GetAccountResponse)(nil),    // 10: ledger.v1.GetAccountResponse
-	(*ListAccountsRequest)(nil),   // 11: ledger.v1.ListAccountsRequest
-	(*ListAccountsResponse)(nil),  // 12: ledger.v1.ListAccountsResponse
-	(*PlaceHoldRequest)(nil),      // 13: ledger.v1.PlaceHoldRequest
-	(*PlaceHoldResponse)(nil),     // 14: ledger.v1.PlaceHoldResponse
-	(*CaptureHoldRequest)(nil),    // 15: ledger.v1.CaptureHoldRequest
-	(*CaptureHoldResponse)(nil),   // 16: ledger.v1.CaptureHoldResponse
-	(*ReleaseHoldRequest)(nil),    // 17: ledger.v1.ReleaseHoldRequest
-	(*ReleaseHoldResponse)(nil),   // 18: ledger.v1.ReleaseHoldResponse
-	(*ListEntriesRequest)(nil),    // 19: ledger.v1.ListEntriesRequest
-	(*ListEntriesResponse)(nil),   // 20: ledger.v1.ListEntriesResponse
-	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),   // 22: google.protobuf.Duration
+	(ErrorReason)(0),              // 0: ledger.v1.ErrorReason
+	(AccountKind)(0),              // 1: ledger.v1.AccountKind
+	(HoldStatus)(0),               // 2: ledger.v1.HoldStatus
+	(TransactionKind)(0),          // 3: ledger.v1.TransactionKind
+	(*Account)(nil),               // 4: ledger.v1.Account
+	(*Hold)(nil),                  // 5: ledger.v1.Hold
+	(*Entry)(nil),                 // 6: ledger.v1.Entry
+	(*Transaction)(nil),           // 7: ledger.v1.Transaction
+	(*OpenAccountRequest)(nil),    // 8: ledger.v1.OpenAccountRequest
+	(*OpenAccountResponse)(nil),   // 9: ledger.v1.OpenAccountResponse
+	(*GetAccountRequest)(nil),     // 10: ledger.v1.GetAccountRequest
+	(*GetAccountResponse)(nil),    // 11: ledger.v1.GetAccountResponse
+	(*ListAccountsRequest)(nil),   // 12: ledger.v1.ListAccountsRequest
+	(*ListAccountsResponse)(nil),  // 13: ledger.v1.ListAccountsResponse
+	(*PlaceHoldRequest)(nil),      // 14: ledger.v1.PlaceHoldRequest
+	(*PlaceHoldResponse)(nil),     // 15: ledger.v1.PlaceHoldResponse
+	(*CaptureHoldRequest)(nil),    // 16: ledger.v1.CaptureHoldRequest
+	(*CaptureHoldResponse)(nil),   // 17: ledger.v1.CaptureHoldResponse
+	(*ReleaseHoldRequest)(nil),    // 18: ledger.v1.ReleaseHoldRequest
+	(*ReleaseHoldResponse)(nil),   // 19: ledger.v1.ReleaseHoldResponse
+	(*ListEntriesRequest)(nil),    // 20: ledger.v1.ListEntriesRequest
+	(*ListEntriesResponse)(nil),   // 21: ledger.v1.ListEntriesResponse
+	(*timestamppb.Timestamp)(nil), // 22: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),   // 23: google.protobuf.Duration
 }
 var file_ledger_v1_ledger_proto_depIdxs = []int32{
-	0,  // 0: ledger.v1.Account.kind:type_name -> ledger.v1.AccountKind
-	21, // 1: ledger.v1.Account.created_at:type_name -> google.protobuf.Timestamp
-	21, // 2: ledger.v1.Account.updated_at:type_name -> google.protobuf.Timestamp
-	1,  // 3: ledger.v1.Hold.status:type_name -> ledger.v1.HoldStatus
-	21, // 4: ledger.v1.Hold.expires_at:type_name -> google.protobuf.Timestamp
-	21, // 5: ledger.v1.Hold.created_at:type_name -> google.protobuf.Timestamp
-	21, // 6: ledger.v1.Hold.updated_at:type_name -> google.protobuf.Timestamp
-	21, // 7: ledger.v1.Entry.created_at:type_name -> google.protobuf.Timestamp
-	2,  // 8: ledger.v1.Transaction.kind:type_name -> ledger.v1.TransactionKind
-	5,  // 9: ledger.v1.Transaction.entries:type_name -> ledger.v1.Entry
-	21, // 10: ledger.v1.Transaction.created_at:type_name -> google.protobuf.Timestamp
-	3,  // 11: ledger.v1.OpenAccountResponse.account:type_name -> ledger.v1.Account
-	3,  // 12: ledger.v1.GetAccountResponse.account:type_name -> ledger.v1.Account
-	3,  // 13: ledger.v1.ListAccountsResponse.accounts:type_name -> ledger.v1.Account
-	22, // 14: ledger.v1.PlaceHoldRequest.ttl:type_name -> google.protobuf.Duration
-	4,  // 15: ledger.v1.PlaceHoldResponse.hold:type_name -> ledger.v1.Hold
-	4,  // 16: ledger.v1.CaptureHoldResponse.hold:type_name -> ledger.v1.Hold
-	6,  // 17: ledger.v1.CaptureHoldResponse.transaction:type_name -> ledger.v1.Transaction
-	4,  // 18: ledger.v1.ReleaseHoldResponse.hold:type_name -> ledger.v1.Hold
-	5,  // 19: ledger.v1.ListEntriesResponse.entries:type_name -> ledger.v1.Entry
-	7,  // 20: ledger.v1.LedgerService.OpenAccount:input_type -> ledger.v1.OpenAccountRequest
-	9,  // 21: ledger.v1.LedgerService.GetAccount:input_type -> ledger.v1.GetAccountRequest
-	11, // 22: ledger.v1.LedgerService.ListAccounts:input_type -> ledger.v1.ListAccountsRequest
-	13, // 23: ledger.v1.LedgerService.PlaceHold:input_type -> ledger.v1.PlaceHoldRequest
-	15, // 24: ledger.v1.LedgerService.CaptureHold:input_type -> ledger.v1.CaptureHoldRequest
-	17, // 25: ledger.v1.LedgerService.ReleaseHold:input_type -> ledger.v1.ReleaseHoldRequest
-	19, // 26: ledger.v1.LedgerService.ListEntries:input_type -> ledger.v1.ListEntriesRequest
-	8,  // 27: ledger.v1.LedgerService.OpenAccount:output_type -> ledger.v1.OpenAccountResponse
-	10, // 28: ledger.v1.LedgerService.GetAccount:output_type -> ledger.v1.GetAccountResponse
-	12, // 29: ledger.v1.LedgerService.ListAccounts:output_type -> ledger.v1.ListAccountsResponse
-	14, // 30: ledger.v1.LedgerService.PlaceHold:output_type -> ledger.v1.PlaceHoldResponse
-	16, // 31: ledger.v1.LedgerService.CaptureHold:output_type -> ledger.v1.CaptureHoldResponse
-	18, // 32: ledger.v1.LedgerService.ReleaseHold:output_type -> ledger.v1.ReleaseHoldResponse
-	20, // 33: ledger.v1.LedgerService.ListEntries:output_type -> ledger.v1.ListEntriesResponse
+	1,  // 0: ledger.v1.Account.kind:type_name -> ledger.v1.AccountKind
+	22, // 1: ledger.v1.Account.created_at:type_name -> google.protobuf.Timestamp
+	22, // 2: ledger.v1.Account.updated_at:type_name -> google.protobuf.Timestamp
+	2,  // 3: ledger.v1.Hold.status:type_name -> ledger.v1.HoldStatus
+	22, // 4: ledger.v1.Hold.expires_at:type_name -> google.protobuf.Timestamp
+	22, // 5: ledger.v1.Hold.created_at:type_name -> google.protobuf.Timestamp
+	22, // 6: ledger.v1.Hold.updated_at:type_name -> google.protobuf.Timestamp
+	22, // 7: ledger.v1.Entry.created_at:type_name -> google.protobuf.Timestamp
+	3,  // 8: ledger.v1.Transaction.kind:type_name -> ledger.v1.TransactionKind
+	6,  // 9: ledger.v1.Transaction.entries:type_name -> ledger.v1.Entry
+	22, // 10: ledger.v1.Transaction.created_at:type_name -> google.protobuf.Timestamp
+	4,  // 11: ledger.v1.OpenAccountResponse.account:type_name -> ledger.v1.Account
+	4,  // 12: ledger.v1.GetAccountResponse.account:type_name -> ledger.v1.Account
+	4,  // 13: ledger.v1.ListAccountsResponse.accounts:type_name -> ledger.v1.Account
+	23, // 14: ledger.v1.PlaceHoldRequest.ttl:type_name -> google.protobuf.Duration
+	5,  // 15: ledger.v1.PlaceHoldResponse.hold:type_name -> ledger.v1.Hold
+	5,  // 16: ledger.v1.CaptureHoldResponse.hold:type_name -> ledger.v1.Hold
+	7,  // 17: ledger.v1.CaptureHoldResponse.transaction:type_name -> ledger.v1.Transaction
+	5,  // 18: ledger.v1.ReleaseHoldResponse.hold:type_name -> ledger.v1.Hold
+	6,  // 19: ledger.v1.ListEntriesResponse.entries:type_name -> ledger.v1.Entry
+	8,  // 20: ledger.v1.LedgerService.OpenAccount:input_type -> ledger.v1.OpenAccountRequest
+	10, // 21: ledger.v1.LedgerService.GetAccount:input_type -> ledger.v1.GetAccountRequest
+	12, // 22: ledger.v1.LedgerService.ListAccounts:input_type -> ledger.v1.ListAccountsRequest
+	14, // 23: ledger.v1.LedgerService.PlaceHold:input_type -> ledger.v1.PlaceHoldRequest
+	16, // 24: ledger.v1.LedgerService.CaptureHold:input_type -> ledger.v1.CaptureHoldRequest
+	18, // 25: ledger.v1.LedgerService.ReleaseHold:input_type -> ledger.v1.ReleaseHoldRequest
+	20, // 26: ledger.v1.LedgerService.ListEntries:input_type -> ledger.v1.ListEntriesRequest
+	9,  // 27: ledger.v1.LedgerService.OpenAccount:output_type -> ledger.v1.OpenAccountResponse
+	11, // 28: ledger.v1.LedgerService.GetAccount:output_type -> ledger.v1.GetAccountResponse
+	13, // 29: ledger.v1.LedgerService.ListAccounts:output_type -> ledger.v1.ListAccountsResponse
+	15, // 30: ledger.v1.LedgerService.PlaceHold:output_type -> ledger.v1.PlaceHoldResponse
+	17, // 31: ledger.v1.LedgerService.CaptureHold:output_type -> ledger.v1.CaptureHoldResponse
+	19, // 32: ledger.v1.LedgerService.ReleaseHold:output_type -> ledger.v1.ReleaseHoldResponse
+	21, // 33: ledger.v1.LedgerService.ListEntries:output_type -> ledger.v1.ListEntriesResponse
 	27, // [27:34] is the sub-list for method output_type
 	20, // [20:27] is the sub-list for method input_type
 	20, // [20:20] is the sub-list for extension type_name
@@ -1606,7 +1693,7 @@ func file_ledger_v1_ledger_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ledger_v1_ledger_proto_rawDesc), len(file_ledger_v1_ledger_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,

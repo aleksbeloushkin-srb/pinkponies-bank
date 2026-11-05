@@ -152,14 +152,14 @@ func TestErrorMapping(t *testing.T) {
 		code   codes.Code
 		reason string
 	}{
-		{fmt.Errorf("source: %w", ledger.ErrAccountNotFound), codes.NotFound, ReasonAccountNotFound},
-		{ledger.ErrHoldNotFound, codes.NotFound, ReasonHoldNotFound},
-		{fmt.Errorf("%w: available 1", ledger.ErrInsufficientFunds), codes.FailedPrecondition, ReasonInsufficientFunds},
-		{ledger.ErrCurrencyMismatch, codes.FailedPrecondition, ReasonCurrencyMismatch},
-		{ledger.ErrHoldCaptured, codes.FailedPrecondition, ReasonHoldCaptured},
-		{ledger.ErrHoldReleased, codes.FailedPrecondition, ReasonHoldReleased},
-		{ledger.ErrHoldExpired, codes.FailedPrecondition, ReasonHoldExpired},
-		{ledger.ErrIdempotencyConflict, codes.InvalidArgument, ReasonIdempotencyKeyReused},
+		{fmt.Errorf("source: %w", ledger.ErrAccountNotFound), codes.NotFound, ledgerv1.ErrorReason_ACCOUNT_NOT_FOUND.String()},
+		{ledger.ErrHoldNotFound, codes.NotFound, ledgerv1.ErrorReason_HOLD_NOT_FOUND.String()},
+		{fmt.Errorf("%w: available 1", ledger.ErrInsufficientFunds), codes.FailedPrecondition, ledgerv1.ErrorReason_INSUFFICIENT_FUNDS.String()},
+		{ledger.ErrCurrencyMismatch, codes.FailedPrecondition, ledgerv1.ErrorReason_CURRENCY_MISMATCH.String()},
+		{ledger.ErrHoldCaptured, codes.FailedPrecondition, ledgerv1.ErrorReason_HOLD_CAPTURED.String()},
+		{ledger.ErrHoldReleased, codes.FailedPrecondition, ledgerv1.ErrorReason_HOLD_RELEASED.String()},
+		{ledger.ErrHoldExpired, codes.FailedPrecondition, ledgerv1.ErrorReason_HOLD_EXPIRED.String()},
+		{ledger.ErrIdempotencyConflict, codes.InvalidArgument, ledgerv1.ErrorReason_IDEMPOTENCY_KEY_REUSED.String()},
 		{&pgconn.PgError{Code: "40P01"}, codes.Unavailable, ""},
 		{fmt.Errorf("query: %w", context.DeadlineExceeded), codes.DeadlineExceeded, ""},
 		{errors.New("disk on fire"), codes.Internal, ""},

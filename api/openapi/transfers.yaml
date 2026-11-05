@@ -1,0 +1,288 @@
+openapi: 3.1.0
+info:
+  title: Pinkponies Bank transfers API
+  version: 1.0.0
+  description: |
+    Client-facing API of the transfers service. A transfer is accepted at
+    once and then moved by a saga (hold, screen, capture or release) in the
+    background; clients follow it with the long poll.
+
+    Every error has the body `Error`. Amounts are integers in minor units.
+servers:
+  - url: http://localhost:8080
+paths:
+  /v1/transfers:
+    post:
+      operationId: createTransfer
+      summary: Accept a transfer
+      description: |
+        Idempotent by the Idempotency-Key header: the same key and body
+        return the stored transfer with 200; the same key with another body
+        is 422.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransfer'
+      responses:
+        '201':
+          description: Accepted; the saga runs in the background.
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '200':
+          description: A replay of an earlier request with the same key and body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/Error'
+        '413':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /v1/transfers/{id}:
+    get:
+      operationId: getTransfer
+      summary: Read a transfer
+      parameters:
+        - $ref: '#/components/parameters/TransferID'
+      responses:
+        '200':
+          description: The transfer with its saga log.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/transfers/{id}/wait:
+    get:
+      operationId: waitTransfer
+      summary: Long poll for a change
+      description: |
+        Answers as soon as the transfer's version exceeds `version`, or
+        after the soft timeout (15 s by default) with `modified: false`.
+        Send the version of the last answer and repeat.
+      parameters:
+        - $ref: '#/components/parameters/TransferID'
+        - name: version
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        '200':
+          description: The transfer as of the answer.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Transfer'
+                  - type: object
+                    required: [modified]
+                    properties:
+                      modified:
+                        type: boolean
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/RetryLater'
+        '503':
+          $ref: '#/components/responses/RetryLater'
+  /v1/accounts:
+    get:
+      operationId: listAccounts
+      summary: List customer accounts with their balances
+      description: Read from the ledger over gRPC on every request.
+      responses:
+        '200':
+          description: The accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+        '503':
+          $ref: '#/components/responses/RetryLater'
+  /config.json:
+    get:
+      operationId: uiConfig
+      summary: Settings of the web UI
+      responses:
+        '200':
+          description: Where the browser finds the notifications API.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notifications_url:
+                    type: string
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Printable ASCII, at most 255 characters. Reuse it when you retry.
+      schema:
+        type: string
+        maxLength: 255
+    TransferID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Error:
+      description: An error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RetryLater:
+      description: Temporarily unavailable; retry after Retry-After seconds.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    CreateTransfer:
+      type: object
+      additionalProperties: false
+      required: [source_account_id, destination_account_id, amount_minor, currency]
+      properties:
+        source_account_id:
+          type: string
+          format: uuid
+        destination_account_id:
+          type: string
+          format: uuid
+        amount_minor:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 1000000000
+        currency:
+          type: string
+          enum: [EUR, USD, GBP, CHF, JPY]
+    Transfer:
+      type: object
+      required: [id, source_account_id, destination_account_id, amount_minor, currency, status, version, created_at, updated_at, steps]
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_account_id:
+          type: string
+          format: uuid
+        destination_account_id:
+          type: string
+          format: uuid
+        amount_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [pending, held, completed, rejected, canceled]
+        reason:
+          type: string
+          description: Why a transfer was rejected or canceled.
+          enum: [insufficient_funds, account_not_found, currency_mismatch, screening_declined, screening_unavailable, screening_review_timeout, hold_expired]
+        version:
+          type: integer
+          format: int64
+          description: Grows by one with every change of the transfer or its saga log.
+        hold_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/Step'
+    Step:
+      type: object
+      required: [step, state, attempts, started_at, updated_at]
+      properties:
+        step:
+          type: string
+          enum: [hold, screen, capture, release]
+        state:
+          type: string
+          enum: [running, waiting, succeeded, failed]
+        outcome:
+          type: string
+        attempts:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Account:
+      type: object
+      required: [id, name, currency, posted_minor, held_minor, available_minor]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        currency:
+          type: string
+        posted_minor:
+          type: integer
+          format: int64
+        held_minor:
+          type: integer
+          format: int64
+        available_minor:
+          type: integer
+          format: int64
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [invalid_argument, too_large, not_found, idempotency_conflict, too_many_waiters, unavailable, upstream_unavailable, internal]
+        message:
+          type: string
+        field:
+          type: string

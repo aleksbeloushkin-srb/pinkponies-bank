@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/protoadapt"
 
+	ledgerv1 "github.com/aleksbeloushkin-srb/pinkponies-bank/gen/ledger/v1"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/ledger"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/pgdb"
 )
@@ -18,34 +19,22 @@ import (
 // returns.
 const ErrorDomain = "ledger.pinkponies-bank"
 
-// Reasons of google.rpc.ErrorInfo, part of the API contract (see
-// api/proto/ledger/v1/ledger.proto).
-const (
-	ReasonIdempotencyKeyReused = "IDEMPOTENCY_KEY_REUSED"
-	ReasonAccountNotFound      = "ACCOUNT_NOT_FOUND"
-	ReasonHoldNotFound         = "HOLD_NOT_FOUND"
-	ReasonInsufficientFunds    = "INSUFFICIENT_FUNDS"
-	ReasonCurrencyMismatch     = "CURRENCY_MISMATCH"
-	ReasonHoldCaptured         = "HOLD_CAPTURED"
-	ReasonHoldReleased         = "HOLD_RELEASED"
-	ReasonHoldExpired          = "HOLD_EXPIRED"
-)
-
-// reasons maps domain errors to their code and reason, in the order they
-// are matched.
+// reasons maps domain errors to their code and ErrorInfo reason, in the
+// order they are matched. The reasons are part of the contract: the
+// ErrorReason enum of api/proto/ledger/v1/ledger.proto.
 var reasons = []struct {
 	err    error
 	code   codes.Code
-	reason string
+	reason ledgerv1.ErrorReason
 }{
-	{ledger.ErrIdempotencyConflict, codes.InvalidArgument, ReasonIdempotencyKeyReused},
-	{ledger.ErrAccountNotFound, codes.NotFound, ReasonAccountNotFound},
-	{ledger.ErrHoldNotFound, codes.NotFound, ReasonHoldNotFound},
-	{ledger.ErrInsufficientFunds, codes.FailedPrecondition, ReasonInsufficientFunds},
-	{ledger.ErrCurrencyMismatch, codes.FailedPrecondition, ReasonCurrencyMismatch},
-	{ledger.ErrHoldCaptured, codes.FailedPrecondition, ReasonHoldCaptured},
-	{ledger.ErrHoldReleased, codes.FailedPrecondition, ReasonHoldReleased},
-	{ledger.ErrHoldExpired, codes.FailedPrecondition, ReasonHoldExpired},
+	{ledger.ErrIdempotencyConflict, codes.InvalidArgument, ledgerv1.ErrorReason_IDEMPOTENCY_KEY_REUSED},
+	{ledger.ErrAccountNotFound, codes.NotFound, ledgerv1.ErrorReason_ACCOUNT_NOT_FOUND},
+	{ledger.ErrHoldNotFound, codes.NotFound, ledgerv1.ErrorReason_HOLD_NOT_FOUND},
+	{ledger.ErrInsufficientFunds, codes.FailedPrecondition, ledgerv1.ErrorReason_INSUFFICIENT_FUNDS},
+	{ledger.ErrCurrencyMismatch, codes.FailedPrecondition, ledgerv1.ErrorReason_CURRENCY_MISMATCH},
+	{ledger.ErrHoldCaptured, codes.FailedPrecondition, ledgerv1.ErrorReason_HOLD_CAPTURED},
+	{ledger.ErrHoldReleased, codes.FailedPrecondition, ledgerv1.ErrorReason_HOLD_RELEASED},
+	{ledger.ErrHoldExpired, codes.FailedPrecondition, ledgerv1.ErrorReason_HOLD_EXPIRED},
 }
 
 // toStatus maps an error from the use cases to a gRPC status. It is the
@@ -60,7 +49,7 @@ func toStatus(ctx context.Context, log *slog.Logger, err error) error {
 	}
 	for _, r := range reasons {
 		if errors.Is(err, r.err) {
-			return withDetails(r.code, err.Error(), &errdetails.ErrorInfo{Reason: r.reason, Domain: ErrorDomain})
+			return withDetails(r.code, err.Error(), &errdetails.ErrorInfo{Reason: r.reason.String(), Domain: ErrorDomain})
 		}
 	}
 	switch {

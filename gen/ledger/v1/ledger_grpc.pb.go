@@ -7,8 +7,9 @@
 // The ledger of Pinkponies Bank: accounts, holds and a double-entry journal.
 //
 // Error model. Every failure is a gRPC status; business refusals carry a
-// google.rpc.ErrorInfo detail with domain "ledger.pinkponies-bank" and one
-// of the reasons below, so a client never parses messages:
+// google.rpc.ErrorInfo detail with domain "ledger.pinkponies-bank" and a
+// reason from the ErrorReason enum below, so a client never parses
+// messages:
 //
 //   InvalidArgument     a field is malformed (google.rpc.BadRequest detail),
 //                       or IDEMPOTENCY_KEY_REUSED: the key was used before

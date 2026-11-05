@@ -6,6 +6,11 @@ modules:
 lint:
   use:
     - STANDARD
+  # ErrorReason values are google.rpc.ErrorInfo reason strings, which by
+  # convention are not prefixed with the enum name.
+  ignore_only:
+    ENUM_VALUE_PREFIX:
+      - api/proto/ledger/v1/ledger.proto
 breaking:
   use:
     - FILE

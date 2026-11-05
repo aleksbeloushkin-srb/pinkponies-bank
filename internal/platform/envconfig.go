@@ -50,6 +50,10 @@ func (l *Loader) fail(name string, err error) {
 	l.errs = append(l.errs, fmt.Errorf("%s%s: %w", l.prefix, name, err))
 }
 
+// Fail records a parse error of a variable that a service reads itself,
+// such as a list of roles.
+func (l *Loader) Fail(name string, err error) { l.fail(name, err) }
+
 // String returns the variable, or def when it is not set.
 func (l *Loader) String(name, def string) string {
 	if v, ok := l.lookup(name); ok {

@@ -3,8 +3,9 @@ syntax = "proto3";
 // The ledger of Pinkponies Bank: accounts, holds and a double-entry journal.
 //
 // Error model. Every failure is a gRPC status; business refusals carry a
-// google.rpc.ErrorInfo detail with domain "ledger.pinkponies-bank" and one
-// of the reasons below, so a client never parses messages:
+// google.rpc.ErrorInfo detail with domain "ledger.pinkponies-bank" and a
+// reason from the ErrorReason enum below, so a client never parses
+// messages:
 //
 //   InvalidArgument     a field is malformed (google.rpc.BadRequest detail),
 //                       or IDEMPOTENCY_KEY_REUSED: the key was used before
@@ -50,6 +51,26 @@ service LedgerService {
   rpc ReleaseHold(ReleaseHoldRequest) returns (ReleaseHoldResponse);
   // ListEntries lists an account's journal entries, oldest first.
   rpc ListEntries(ListEntriesRequest) returns (ListEntriesResponse);
+}
+
+// ErrorReason lists the reasons of google.rpc.ErrorInfo details. The value
+// names are the reason strings, as in the Google API design guide, so the
+// values are not prefixed with the enum name.
+enum ErrorReason {
+  ERROR_REASON_UNSPECIFIED = 0;
+  // The idempotency key was used before with a different request.
+  IDEMPOTENCY_KEY_REUSED = 1;
+  ACCOUNT_NOT_FOUND = 2;
+  HOLD_NOT_FOUND = 3;
+  // The source's available balance is below the amount.
+  INSUFFICIENT_FUNDS = 4;
+  CURRENCY_MISMATCH = 5;
+  // The hold was captured; it cannot be captured again or released.
+  HOLD_CAPTURED = 6;
+  // The hold was released, on request or by the expiry sweep.
+  HOLD_RELEASED = 7;
+  // The hold is past its expiry and cannot be captured.
+  HOLD_EXPIRED = 8;
 }
 
 // AccountKind separates clients' accounts from the bank's own.

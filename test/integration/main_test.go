@@ -20,12 +20,13 @@ import (
 
 	ledgermigrations "github.com/aleksbeloushkin-srb/pinkponies-bank/internal/ledger/migrations"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/pgdb"
+	transfersmigrations "github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/migrations"
 )
 
 // Pools of the service databases, shared by all tests. Each test resets the
-// tables it uses first, so the tests of a package must not run in
+// tables it uses first, so the tests of this package must not run in
 // parallel.
-var ledgerDB *pgxpool.Pool
+var ledgerDB, transfersDB *pgxpool.Pool
 
 func TestMain(m *testing.M) {
 	os.Exit(runTests(m))
@@ -63,7 +64,7 @@ func runTests(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	for _, db := range []string{"ledger"} {
+	for _, db := range []string{"ledger", "transfers"} {
 		if _, err := admin.Exec(ctx, "CREATE DATABASE "+db); err != nil {
 			fmt.Fprintln(os.Stderr, "create database:", err)
 			return 1
@@ -76,6 +77,11 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 	defer ledgerDB.Close()
+	if transfersDB, err = connect(ctx, dsn, "transfers", transfersmigrations.FS); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer transfersDB.Close()
 	return m.Run()
 }
 
