@@ -59,7 +59,7 @@ func newQueueWorker(q *taskqueue.Postgres, h taskqueue.Handler, c *clock) *taskq
 
 // Eight workers drain the same table at once. SKIP LOCKED and the lease
 // guarantee that each task is handled exactly once.
-func TestQueueConcurrentWorkersNeverDoubleProcess(t *testing.T) {
+func TestTaskQueueConcurrentWorkersNeverDoubleProcess(t *testing.T) {
 	q, c := newQueue(t)
 	const tasks, workers = 200, 8
 	enqueue(t, q, c, tasks)
@@ -107,7 +107,7 @@ func TestQueueConcurrentWorkersNeverDoubleProcess(t *testing.T) {
 
 // A worker that dies keeps its lease until it expires; then another worker
 // claims the task, and the first one can no longer settle it.
-func TestQueueLeaseExpiryAndFencing(t *testing.T) {
+func TestTaskQueueLeaseExpiryAndFencing(t *testing.T) {
 	q, c := newQueue(t)
 	ctx := context.Background()
 	enqueue(t, q, c, 1)
@@ -134,7 +134,7 @@ func TestQueueLeaseExpiryAndFencing(t *testing.T) {
 
 // A task that keeps failing is retried with backoff and goes dead after
 // MaxAttempts; a postponed one spends no attempts.
-func TestQueueDeadAndPostponed(t *testing.T) {
+func TestTaskQueueDeadAndPostponed(t *testing.T) {
 	q, c := newQueue(t)
 	enqueue(t, q, c, 1)
 	var runs atomic.Int32
@@ -182,7 +182,7 @@ func TestQueueDeadAndPostponed(t *testing.T) {
 // A handler that kills its process never settles its task. The claim counts
 // the attempt anyway, so after MaxAttempts such runs the next claim buries
 // the task without running it, instead of crashing the process forever.
-func TestQueueCrashLoopGoesDead(t *testing.T) {
+func TestTaskQueueCrashLoopGoesDead(t *testing.T) {
 	q, c := newQueue(t)
 	enqueue(t, q, c, 1)
 	cfg := queueConfig()
@@ -219,7 +219,7 @@ func TestQueueCrashLoopGoesDead(t *testing.T) {
 // UTF-8, and a refused settle would leave the task to run again. With one,
 // two and three bytes before the three-byte runes, a byte cut of any length
 // splits a rune in at least two of the three cases.
-func TestQueueErrorTextIsCutOnARuneBoundary(t *testing.T) {
+func TestTaskQueueErrorTextIsCutOnARuneBoundary(t *testing.T) {
 	q, c := newQueue(t)
 	for _, prefix := range []string{"", "x", "xx"} {
 		enqueue(t, q, c, 1)
@@ -244,7 +244,7 @@ func TestQueueErrorTextIsCutOnARuneBoundary(t *testing.T) {
 
 // Enqueueing is idempotent by (kind, aggregate, dedup key), and a task
 // enqueued in a rolled-back transaction does not exist.
-func TestQueueEnqueueIsTransactional(t *testing.T) {
+func TestTaskQueueEnqueueIsTransactional(t *testing.T) {
 	q, c := newQueue(t)
 	tx := txctx.New(transfersDB)
 	spec := taskqueue.Spec{Kind: kindTest, AggregateID: uuid.New(), DedupKey: "saga", RunAfter: c.Now()}

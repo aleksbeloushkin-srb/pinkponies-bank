@@ -191,7 +191,7 @@ at most once, one event per status in order, and no task left unfinished.
 
 A crash in these tests is a panic the worker recovers, which settles the
 task as a failed attempt. A process that dies in the handler settles
-nothing; `TestQueueCrashLoopGoesDead` in
+nothing; `TestTaskQueueCrashLoopGoesDead` in
 [`test/integration/queue_test.go`](../test/integration/queue_test.go)
 covers that case: the claim has counted the attempt, and after
 `MaxAttempts` such runs the next claim buries the task without running it.
