@@ -215,6 +215,59 @@ func TestRateLimitedScreeningHonoursRetryAfter(t *testing.T) {
 	}
 }
 
+// A provider's wait hint is cut to the time the screen step has left: one
+// 429 asking for a day cannot keep the money held for a day. Out of time
+// without ever seeing a review, the transfer ends as screening_unavailable,
+// not as a review timeout.
+func TestRateLimitHintIsCappedAtTheStepsTime(t *testing.T) {
+	f := newFixture(t)
+	calls := 0
+	f.screener.fail = func() error {
+		calls++
+		if calls == 1 {
+			return &RetryAfterError{After: 24 * time.Hour, Err: fmt.Errorf("%w: 429", ErrScreeningUnavailable)}
+		}
+		return nil
+	}
+	id := f.create(t, 1250)
+	f.drain(t)
+
+	tr := f.transfer(t, id)
+	if took := f.clock.Now().Sub(t0); took > testConfig().ScreenReviewTimeout+time.Minute {
+		t.Fatalf("one 429 kept the transfer in flight for %s (screen time %s)", took, testConfig().ScreenReviewTimeout)
+	}
+	if tr.Status != transfers.StatusCanceled || tr.Reason != transfers.ReasonScreeningUnavailable || calls != 1 {
+		t.Fatalf("transfer = %s/%s after %d calls, want canceled/%s after 1", tr.Status, tr.Reason, calls, transfers.ReasonScreeningUnavailable)
+	}
+	if src := f.ledger.account(f.src); src.AvailableMinor != 10_000 {
+		t.Fatalf("hold not released: %+v", src)
+	}
+}
+
+// The pivot has one guard in the saga: no capture without an approved
+// screening. The ledger's captured-or-released state machine is the other.
+func TestCaptureWithoutApprovalIsRefused(t *testing.T) {
+	f := newFixture(t)
+	f.screener.reviewDelay = time.Hour // stays under review
+	id := f.create(t, 1277)
+	for range 2 { // hold, then the first screen run (review)
+		if _, err := f.worker.RunOnce(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if tr := f.transfer(t, id); tr.Status != transfers.StatusHeld {
+		t.Fatalf("setup: status %s", tr.Status)
+	}
+	err := f.svc.HandleTask(t.Context(), taskqueue.Task{Kind: KindCapture, AggregateID: id})
+	var perm *taskqueue.PermanentError
+	if !errors.As(err, &perm) {
+		t.Fatalf("capture without approval = %v, want a permanent error", err)
+	}
+	if _, captured, _ := f.ledger.counts(); captured != 0 {
+		t.Fatal("money moved without an approved screening")
+	}
+}
+
 // The hold expired while the transfer waited: capture is refused, the hold
 // is released (a replay if the ledger's sweep did it) and the transfer is
 // canceled. No money moves.

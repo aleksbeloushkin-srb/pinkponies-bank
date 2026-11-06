@@ -36,11 +36,11 @@ func against(t *testing.T, cfg fakerisk.Config, timeout time.Duration) (c *Clien
 		srv.Close()
 	})
 	m = NewMetrics(prometheus.NewRegistry())
-	c, err := New(Config{BaseURL: srv.URL, CallTimeout: timeout}, srv.Client(), m)
+	c, err := New(Config{BaseURL: srv.URL, CallTimeout: timeout, MaxRetryAfter: time.Minute}, srv.Client(), m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	patient, err = New(Config{BaseURL: srv.URL, CallTimeout: 10 * time.Second}, srv.Client(), NewMetrics(prometheus.NewRegistry()))
+	patient, err = New(Config{BaseURL: srv.URL, CallTimeout: 10 * time.Second, MaxRetryAfter: time.Minute}, srv.Client(), NewMetrics(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestStatusCodes(t *testing.T) {
 	}))
 	defer srv.Close()
 	m := NewMetrics(prometheus.NewRegistry())
-	c, err := New(Config{BaseURL: srv.URL, CallTimeout: time.Second}, srv.Client(), m)
+	c, err := New(Config{BaseURL: srv.URL, CallTimeout: time.Second, MaxRetryAfter: time.Minute}, srv.Client(), m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestDialErrorIsUnavailable(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close() // nothing listens there now
 	m := NewMetrics(prometheus.NewRegistry())
-	c, err := New(Config{BaseURL: "http://" + addr, CallTimeout: time.Second}, &http.Client{}, m)
+	c, err := New(Config{BaseURL: "http://" + addr, CallTimeout: time.Second, MaxRetryAfter: time.Minute}, &http.Client{}, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +176,45 @@ func TestDialErrorIsUnavailable(t *testing.T) {
 
 func TestNewRejectsBadURL(t *testing.T) {
 	for _, u := range []string{"", "localhost:8090", "ftp://x"} {
-		if _, err := New(Config{BaseURL: u, CallTimeout: time.Second}, http.DefaultClient, NewMetrics(prometheus.NewRegistry())); err == nil {
+		if _, err := New(Config{BaseURL: u, CallTimeout: time.Second, MaxRetryAfter: time.Minute}, http.DefaultClient, NewMetrics(prometheus.NewRegistry())); err == nil {
 			t.Errorf("%q accepted", u)
+		}
+	}
+}
+
+// Retry-After comes from outside: a long wait, in seconds or as a date
+// years ahead, is cut to MaxRetryAfter, so the provider cannot park a saga
+// step that holds money.
+func TestRetryAfterIsCapped(t *testing.T) {
+	for _, header := range []string{"31536000", time.Now().AddDate(300, 0, 0).UTC().Format(http.TimeFormat), "7"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", header)
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		c, err := New(Config{BaseURL: srv.URL, CallTimeout: 5 * time.Second, MaxRetryAfter: 20 * time.Second}, srv.Client(), NewMetrics(prometheus.NewRegistry()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Screen(context.Background(), request(100))
+		srv.Close()
+		var hint *app.RetryAfterError
+		if !errors.As(err, &hint) {
+			t.Fatalf("Retry-After %q: err = %v", header, err)
+		}
+		want := 20 * time.Second
+		if header == "7" {
+			want = 7 * time.Second
+		}
+		if hint.RetryAfter() != want {
+			t.Fatalf("Retry-After %q: wait %s, want %s", header, hint.RetryAfter(), want)
+		}
+	}
+}
+
+func TestNewRejectsMissingTimeouts(t *testing.T) {
+	for _, cfg := range []Config{{BaseURL: "http://x", MaxRetryAfter: time.Minute}, {BaseURL: "http://x", CallTimeout: time.Second}} {
+		if _, err := New(cfg, http.DefaultClient, NewMetrics(prometheus.NewRegistry())); err == nil {
+			t.Errorf("%+v accepted", cfg)
 		}
 	}
 }

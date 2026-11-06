@@ -287,7 +287,7 @@ func newScreener(cfg config, m *riskclient.Metrics) (app.Screener, error) {
 	if !cfg.Roles.Worker && cfg.RiskURL == "" {
 		return noScreener{}, nil
 	}
-	c, err := riskclient.New(riskclient.Config{BaseURL: cfg.RiskURL, CallTimeout: cfg.RiskTimeout}, platform.NewHTTPClient(), m)
+	c, err := riskclient.New(riskclient.Config{BaseURL: cfg.RiskURL, CallTimeout: cfg.RiskTimeout, MaxRetryAfter: cfg.RiskMaxRetryAfter}, platform.NewHTTPClient(), m)
 	if err != nil {
 		// A nil interface, not an interface holding a nil *Client.
 		return nil, err

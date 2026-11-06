@@ -48,6 +48,8 @@ type config struct {
 	LedgerTimeout time.Duration
 	RiskURL       string
 	RiskTimeout   time.Duration
+	// RiskMaxRetryAfter caps the wait a provider's 429 may ask for.
+	RiskMaxRetryAfter time.Duration
 
 	WorkerConcurrency  int
 	WorkerIdleInterval time.Duration
@@ -119,6 +121,9 @@ func loadConfig(environ []string) (config, error) {
 		RiskURL:       l.String("RISK_URL", ""),
 		// A healthy provider answers in well under a second.
 		RiskTimeout: l.Duration("RISK_TIMEOUT", 2*time.Second),
+		// As long as the longest review poll: a 429 gets no more say in how
+		// long a step waits than a review does.
+		RiskMaxRetryAfter: l.Duration("RISK_MAX_RETRY_AFTER", 30*time.Second),
 
 		WorkerConcurrency: l.Int("WORKER_CONCURRENCY", 4),
 		// Commit hooks wake the local worker; this only bounds the delay for
@@ -203,7 +208,7 @@ func (c config) validate() error {
 		"HTTP_WRITE_TIMEOUT": c.HTTPWriteTimeout, "HTTP_IDLE_TIMEOUT": c.HTTPIdleTimeout,
 		"SHUTDOWN_TIMEOUT": c.ShutdownTimeout, "DB_STATEMENT_TIMEOUT": c.DBStatementTimeout,
 		"DB_LOCK_TIMEOUT": c.DBLockTimeout, "DB_IDLE_IN_TX_TIMEOUT": c.DBIdleInTxTimeout,
-		"LEDGER_TIMEOUT": c.LedgerTimeout, "RISK_TIMEOUT": c.RiskTimeout,
+		"LEDGER_TIMEOUT": c.LedgerTimeout, "RISK_TIMEOUT": c.RiskTimeout, "RISK_MAX_RETRY_AFTER": c.RiskMaxRetryAfter,
 		"WORKER_IDLE_INTERVAL": c.WorkerIdleInterval, "TASK_LEASE": c.TaskLease, "TASK_TIMEOUT": c.TaskTimeout,
 		"TASK_RETRY_BASE": c.TaskRetryBase, "TASK_RETRY_MAX": c.TaskRetryMax, "HOLD_TTL": c.HoldTTL,
 		"SCREEN_REVIEW_TIMEOUT": c.ScreenReviewTimeout, "SCREEN_POLL_MIN": c.ScreenPollMin,
@@ -233,6 +238,8 @@ func (c config) validate() error {
 		"TASK_TIMEOUT must exceed LEDGER_TIMEOUT and RISK_TIMEOUT by at least 5s: a step is one call and two transactions")
 	ch.Check(c.TaskMaxAttempts > c.ScreenMaxFailures,
 		"TASK_MAX_ATTEMPTS must exceed SCREEN_MAX_FAILURES, or a failing screening goes dead instead of releasing its hold")
+	ch.Check(c.RiskMaxRetryAfter < c.ScreenReviewTimeout,
+		"RISK_MAX_RETRY_AFTER must be shorter than SCREEN_REVIEW_TIMEOUT, or one 429 uses up the screening's whole time")
 	ch.Check(c.HoldTTL >= c.ScreenReviewTimeout+time.Minute,
 		"HOLD_TTL must exceed SCREEN_REVIEW_TIMEOUT by at least 1m, or approved transfers find their hold expired")
 	ch.Check(c.WorkerConcurrency+3 <= c.DBMaxConns,

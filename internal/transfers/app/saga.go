@@ -36,21 +36,21 @@ type releasePayload struct {
 //
 // A crash anywhere leaves the task in the queue, and the next run repeats
 // from step 1 with the same key. docs/SAGA.md has the table.
-func (s *Service) HandleTask(ctx context.Context, t taskqueue.Task) error {
+func (s *Service) HandleTask(ctx context.Context, task taskqueue.Task) error {
 	// The transfer id is the request id of every log line and remote call of
 	// the saga, so one search follows a transfer across services.
-	ctx = platform.WithRequestID(ctx, t.AggregateID.String())
-	switch t.Kind {
+	ctx = platform.WithRequestID(ctx, task.AggregateID.String())
+	switch task.Kind {
 	case KindHold:
-		return s.placeHold(ctx, t.AggregateID)
+		return s.placeHold(ctx, task.AggregateID)
 	case KindScreen:
-		return s.screen(ctx, t.AggregateID, t.Attempts)
+		return s.screen(ctx, task.AggregateID, task.Attempts)
 	case KindCapture:
-		return s.capture(ctx, t.AggregateID)
+		return s.capture(ctx, task.AggregateID)
 	case KindRelease:
-		return s.release(ctx, t.AggregateID, t.Payload)
+		return s.release(ctx, task.AggregateID, task.Payload)
 	default:
-		return taskqueue.Permanent(fmt.Errorf("unknown task kind %q", t.Kind))
+		return taskqueue.Permanent(fmt.Errorf("unknown task kind %q", task.Kind))
 	}
 }
 
@@ -58,40 +58,40 @@ func (s *Service) HandleTask(ctx context.Context, t taskqueue.Task) error {
 // unknown account, other currency) rejects the transfer; nothing needs
 // compensating, because nothing was reserved.
 func (s *Service) placeHold(ctx context.Context, id uuid.UUID) error {
-	t, ok, err := s.beginStep(ctx, id, transfers.StepHold, transfers.StatusPending)
+	tr, ok, err := s.beginStep(ctx, id, transfers.StepHold, transfers.StatusPending)
 	if err != nil || !ok {
 		return err
 	}
 	hold, err := s.ledger.PlaceHold(ctx, HoldRequest{
 		Key:           transfers.StepKey(id, transfers.StepHold),
-		SourceID:      t.SourceAccountID,
-		DestinationID: t.DestinationAccountID,
-		AmountMinor:   t.AmountMinor,
-		Currency:      t.Currency,
+		SourceID:      tr.SourceAccountID,
+		DestinationID: tr.DestinationAccountID,
+		AmountMinor:   tr.AmountMinor,
+		Currency:      tr.Currency,
 		TTL:           s.cfg.HoldTTL,
 	})
 	if reason, refused := holdRefusal(err); refused {
 		return s.finishStep(ctx, id, transfers.StepHold, transfers.StatusPending,
-			func(t *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
-				if _, err := t.FinishStep(transfers.StepHold, transfers.StepFailed, string(reason), now); err != nil {
+			func(tr *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
+				if _, err := tr.FinishStep(transfers.StepHold, transfers.StepFailed, string(reason), now); err != nil {
 					return nil, err
 				}
-				return nil, t.TransitionTo(transfers.StatusRejected, reason)
+				return nil, tr.TransitionTo(transfers.StatusRejected, reason)
 			})
 	}
 	if err != nil {
 		return stepError(transfers.StepHold, err)
 	}
 	return s.finishStep(ctx, id, transfers.StepHold, transfers.StatusPending,
-		func(t *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
-			t.HoldID = hold.ID
-			if _, err := t.FinishStep(transfers.StepHold, transfers.StepSucceeded, transfers.OutcomePlaced, now); err != nil {
+		func(tr *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
+			tr.HoldID = hold.ID
+			if _, err := tr.FinishStep(transfers.StepHold, transfers.StepSucceeded, transfers.OutcomePlaced, now); err != nil {
 				return nil, err
 			}
-			if err := t.TransitionTo(transfers.StatusHeld, ""); err != nil {
+			if err := tr.TransitionTo(transfers.StatusHeld, ""); err != nil {
 				return nil, err
 			}
-			next := s.step(KindScreen, t.ID, nil)
+			next := s.step(KindScreen, tr.ID, nil)
 			return &next, nil
 		})
 }
@@ -112,13 +112,14 @@ func holdRefusal(err error) (transfers.Reason, bool) {
 // decline compensates. An ambiguous answer (timeout, error, lost
 // connection) is retried with the same key, so the provider screens the
 // transfer once, up to ScreenMaxFailures failed calls; review is polled as
-// a delayed retry of the same task, up to ScreenReviewTimeout. Past either
-// bound the hold is released and the transfer is canceled.
+// a delayed retry of the same task. ScreenReviewTimeout, counted from the
+// step's first run, bounds the whole step. Past either bound the hold is
+// released and the transfer is canceled.
 //
 // failures is the number of failed runs of this task so far, counted by the
 // queue; polls of a review are not failures.
 func (s *Service) screen(ctx context.Context, id uuid.UUID, failures int) error {
-	t, ok, err := s.beginStep(ctx, id, transfers.StepScreen, transfers.StatusHeld)
+	tr, ok, err := s.beginStep(ctx, id, transfers.StepScreen, transfers.StatusHeld)
 	if err != nil || !ok {
 		return err
 	}
@@ -126,31 +127,45 @@ func (s *Service) screen(ctx context.Context, id uuid.UUID, failures int) error 
 		return s.compensate(ctx, id, transfers.StepScreen, transfers.StepFailed, transfers.OutcomeUnavailable,
 			transfers.StatusCanceled, transfers.ReasonScreeningUnavailable)
 	}
-	if rec, _ := t.Step(transfers.StepScreen); s.clock.Now().Sub(rec.StartedAt) >= s.cfg.ScreenReviewTimeout {
+	rec, _ := tr.Step(transfers.StepScreen)
+	left := s.cfg.ScreenReviewTimeout - s.clock.Now().Sub(rec.StartedAt)
+	if left <= 0 {
+		// Out of time: a review that never ended, or failures that kept
+		// asking the step to wait.
+		reason := transfers.ReasonScreeningUnavailable
+		if rec.Outcome == transfers.OutcomeReview {
+			reason = transfers.ReasonScreeningTimeout
+		}
 		return s.compensate(ctx, id, transfers.StepScreen, transfers.StepFailed, transfers.OutcomeTimeout,
-			transfers.StatusCanceled, transfers.ReasonScreeningTimeout)
+			transfers.StatusCanceled, reason)
 	}
 
 	res, err := s.screener.Screen(ctx, ScreeningRequest{
 		Key:           transfers.StepKey(id, transfers.StepScreen),
 		TransferID:    id,
-		SourceID:      t.SourceAccountID,
-		DestinationID: t.DestinationAccountID,
-		AmountMinor:   t.AmountMinor,
-		Currency:      t.Currency,
+		SourceID:      tr.SourceAccountID,
+		DestinationID: tr.DestinationAccountID,
+		AmountMinor:   tr.AmountMinor,
+		Currency:      tr.Currency,
 	})
+	var hint *RetryAfterError
+	if errors.As(err, &hint) && hint.After > left {
+		// The provider asks for a longer wait than the step has left; the
+		// next run must come back in time to release the hold.
+		err = &RetryAfterError{After: left, Err: hint.Err}
+	}
 	if err != nil {
 		return stepError(transfers.StepScreen, err)
 	}
 	switch res.Decision {
 	case DecisionApprove:
 		return s.finishStep(ctx, id, transfers.StepScreen, transfers.StatusHeld,
-			func(t *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
-				t.ScreeningID = res.ID
-				if _, err := t.FinishStep(transfers.StepScreen, transfers.StepSucceeded, transfers.OutcomeApprove, now); err != nil {
+			func(tr *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
+				tr.ScreeningID = res.ID
+				if _, err := tr.FinishStep(transfers.StepScreen, transfers.StepSucceeded, transfers.OutcomeApprove, now); err != nil {
 					return nil, err
 				}
-				next := s.step(KindCapture, t.ID, nil)
+				next := s.step(KindCapture, tr.ID, nil)
 				return &next, nil
 			})
 	case DecisionDecline:
@@ -158,15 +173,15 @@ func (s *Service) screen(ctx context.Context, id uuid.UUID, failures int) error 
 			transfers.StatusRejected, transfers.ReasonScreeningDeclined)
 	case DecisionReview:
 		err := s.finishStep(ctx, id, transfers.StepScreen, transfers.StatusHeld,
-			func(t *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
-				t.ScreeningID = res.ID
-				_, err := t.FinishStep(transfers.StepScreen, transfers.StepWaiting, transfers.OutcomeReview, now)
+			func(tr *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
+				tr.ScreeningID = res.ID
+				_, err := tr.FinishStep(transfers.StepScreen, transfers.StepWaiting, transfers.OutcomeReview, now)
 				return nil, err
 			})
 		if err != nil {
 			return err
 		}
-		after := min(max(res.RetryAfter, s.cfg.ScreenPollMin), s.cfg.ScreenPollMax)
+		after := min(max(res.RetryAfter, s.cfg.ScreenPollMin), s.cfg.ScreenPollMax, left)
 		return taskqueue.RetryLater(after, "screening under review")
 	default:
 		return taskqueue.Permanent(fmt.Errorf("screen: unknown decision %q", res.Decision))
@@ -177,14 +192,14 @@ func (s *Service) screen(ctx context.Context, id uuid.UUID, failures int) error 
 // saga only goes forward, retrying with the same key until the ledger
 // answers; a hold that expired in the meantime is released instead.
 func (s *Service) capture(ctx context.Context, id uuid.UUID) error {
-	t, ok, err := s.beginStep(ctx, id, transfers.StepCapture, transfers.StatusHeld)
+	tr, ok, err := s.beginStep(ctx, id, transfers.StepCapture, transfers.StatusHeld)
 	if err != nil || !ok {
 		return err
 	}
-	if rec, _ := t.Step(transfers.StepScreen); rec.Outcome != transfers.OutcomeApprove {
+	if rec, _ := tr.Step(transfers.StepScreen); rec.Outcome != transfers.OutcomeApprove {
 		return taskqueue.Permanent(fmt.Errorf("capture of transfer %s without an approved screening", id))
 	}
-	c, err := s.ledger.CaptureHold(ctx, t.HoldID, transfers.StepKey(id, transfers.StepCapture))
+	c, err := s.ledger.CaptureHold(ctx, tr.HoldID, transfers.StepKey(id, transfers.StepCapture))
 	if errors.Is(err, ErrHoldExpired) {
 		return s.compensate(ctx, id, transfers.StepCapture, transfers.StepFailed, transfers.OutcomeHoldExpired,
 			transfers.StatusCanceled, transfers.ReasonHoldExpired)
@@ -193,12 +208,12 @@ func (s *Service) capture(ctx context.Context, id uuid.UUID) error {
 		return stepError(transfers.StepCapture, err)
 	}
 	return s.finishStep(ctx, id, transfers.StepCapture, transfers.StatusHeld,
-		func(t *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
-			t.LedgerTransactionID = c.TransactionID
-			if _, err := t.FinishStep(transfers.StepCapture, transfers.StepSucceeded, transfers.OutcomeCaptured, now); err != nil {
+		func(tr *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
+			tr.LedgerTransactionID = c.TransactionID
+			if _, err := tr.FinishStep(transfers.StepCapture, transfers.StepSucceeded, transfers.OutcomeCaptured, now); err != nil {
 				return nil, err
 			}
-			return nil, t.TransitionTo(transfers.StatusCompleted, "")
+			return nil, tr.TransitionTo(transfers.StatusCompleted, "")
 		})
 }
 
@@ -211,42 +226,42 @@ func (s *Service) compensate(ctx context.Context, id uuid.UUID, step transfers.S
 		return taskqueue.Permanent(err)
 	}
 	return s.finishStep(ctx, id, step, transfers.StatusHeld,
-		func(t *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
-			if _, err := t.FinishStep(step, state, outcome, now); err != nil {
+		func(tr *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
+			if _, err := tr.FinishStep(step, state, outcome, now); err != nil {
 				return nil, err
 			}
-			next := s.step(KindRelease, t.ID, payload)
+			next := s.step(KindRelease, tr.ID, payload)
 			return &next, nil
 		})
 }
 
 // release gives the held money back and ends the transfer. The ledger
 // treats a released hold as a replay, so this is safe to repeat and safe
-// after the ledger's expiry sweep has released the hold already.
+// after the ledger's expiry sweep has released the hold already. A captured
+// transfer never gets here: the capture's commit moves it to completed, and
+// beginStep wants held. The ledger refuses to release a captured hold all
+// the same.
 func (s *Service) release(ctx context.Context, id uuid.UUID, payload json.RawMessage) error {
 	var p releasePayload
 	if err := json.Unmarshal(payload, &p); err != nil || !p.Status.Final() || p.Status == transfers.StatusCompleted {
 		return taskqueue.Permanent(fmt.Errorf("release: bad payload %s", payload))
 	}
-	t, ok, err := s.beginStep(ctx, id, transfers.StepRelease, transfers.StatusHeld)
+	tr, ok, err := s.beginStep(ctx, id, transfers.StepRelease, transfers.StatusHeld)
 	if err != nil || !ok {
 		return err
 	}
-	if rec, found := t.Step(transfers.StepCapture); found && rec.Outcome == transfers.OutcomeCaptured {
-		return taskqueue.Permanent(fmt.Errorf("release of transfer %s after its capture", id))
-	}
-	if _, err := s.ledger.ReleaseHold(ctx, t.HoldID, transfers.StepKey(id, transfers.StepRelease), string(p.Reason)); err != nil {
+	if _, err := s.ledger.ReleaseHold(ctx, tr.HoldID, transfers.StepKey(id, transfers.StepRelease), string(p.Reason)); err != nil {
 		if errors.Is(err, ErrHoldCaptured) {
-			s.log.ErrorContext(ctx, "ledger reports the hold captured, but the saga decided to release it", "transfer", t)
+			s.log.ErrorContext(ctx, "ledger reports the hold captured, but the saga decided to release it", "transfer", tr)
 		}
 		return stepError(transfers.StepRelease, err)
 	}
 	return s.finishStep(ctx, id, transfers.StepRelease, transfers.StatusHeld,
-		func(t *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
-			if _, err := t.FinishStep(transfers.StepRelease, transfers.StepSucceeded, transfers.OutcomeReleased, now); err != nil {
+		func(tr *transfers.Transfer, now time.Time) (*taskqueue.Spec, error) {
+			if _, err := tr.FinishStep(transfers.StepRelease, transfers.StepSucceeded, transfers.OutcomeReleased, now); err != nil {
 				return nil, err
 			}
-			return nil, t.TransitionTo(p.Status, p.Reason)
+			return nil, tr.TransitionTo(p.Status, p.Reason)
 		})
 }
 
@@ -266,7 +281,7 @@ func stepError(step transfers.Step, err error) error {
 // ok=false when the saga is past this step, which makes the task obsolete.
 func (s *Service) beginStep(ctx context.Context, id uuid.UUID, step transfers.Step, want transfers.Status) (transfers.Transfer, bool, error) {
 	var (
-		t  transfers.Transfer
+		tr transfers.Transfer
 		ok bool
 	)
 	err := s.tx.Run(ctx, func(ctx context.Context) error {
@@ -288,10 +303,10 @@ func (s *Service) beginStep(ctx context.Context, id uuid.UUID, step transfers.St
 		if err := s.transfers.Update(ctx, cur, prev); err != nil {
 			return fmt.Errorf("record %s attempt: %w", step, err)
 		}
-		t, ok = cur, true
+		tr, ok = cur, true
 		return nil
 	})
-	return t, ok, err
+	return tr, ok, err
 }
 
 // stepResult is what finishStep committed, reported afterwards.
@@ -312,37 +327,37 @@ type stepResult struct {
 // from it is a bug (the checks above make every transition legal), so it
 // is permanent.
 func (s *Service) finishStep(ctx context.Context, id uuid.UUID, step transfers.Step, want transfers.Status,
-	apply func(t *transfers.Transfer, now time.Time) (*taskqueue.Spec, error)) error {
+	apply func(tr *transfers.Transfer, now time.Time) (*taskqueue.Spec, error)) error {
 	var res *stepResult
 	err := s.tx.Run(ctx, func(ctx context.Context) error {
-		t, err := s.transfers.Lock(ctx, id)
+		tr, err := s.transfers.Lock(ctx, id)
 		if err != nil {
 			return fmt.Errorf("lock transfer: %w", err)
 		}
-		before, found := t.Step(step)
-		if t.Status != want || !found || before.Done() {
+		before, found := tr.Step(step)
+		if tr.Status != want || !found || before.Done() {
 			return nil
 		}
-		prev, from := t.Version, t.Status
+		prev, from := tr.Version, tr.Status
 		now := s.clock.Now()
-		next, err := apply(&t, now)
+		next, err := apply(&tr, now)
 		if err != nil {
 			return taskqueue.Permanent(fmt.Errorf("apply %s result: %w", step, err))
 		}
-		after, _ := t.Step(step)
-		if after == before && t.Status == from {
+		after, _ := tr.Step(step)
+		if after == before && tr.Status == from {
 			return nil // a repeated review: nothing to record
 		}
-		t.Touch(now)
-		if err := s.transfers.Update(ctx, t, prev); err != nil {
+		tr.Touch(now)
+		if err := s.transfers.Update(ctx, tr, prev); err != nil {
 			return fmt.Errorf("save %s result: %w", step, err)
 		}
-		if t.Status != from {
+		if tr.Status != from {
 			eventID, err := s.id()
 			if err != nil {
 				return err
 			}
-			if err := s.events.Record(ctx, transfers.NewEvent(eventID, t)); err != nil {
+			if err := s.events.Record(ctx, transfers.NewEvent(eventID, tr)); err != nil {
 				return fmt.Errorf("record event: %w", err)
 			}
 		}
@@ -351,7 +366,7 @@ func (s *Service) finishStep(ctx context.Context, id uuid.UUID, step transfers.S
 				return fmt.Errorf("enqueue %s: %w", next.Kind, err)
 			}
 		}
-		res = &stepResult{transfer: t, step: step, outcome: after.Outcome, from: from}
+		res = &stepResult{transfer: tr, step: step, outcome: after.Outcome, from: from}
 		return nil
 	})
 	if err != nil || res == nil {
@@ -360,9 +375,9 @@ func (s *Service) finishStep(ctx context.Context, id uuid.UUID, step transfers.S
 	// Counted and logged only after the commit: a rolled-back change never
 	// shows up in the metrics.
 	s.metrics.StepFinished(res.step, res.outcome)
-	if t := res.transfer; t.Status != res.from {
-		s.metrics.StatusChanged(res.from, t.Status, t.UpdatedAt.Sub(t.CreatedAt))
-		s.log.InfoContext(ctx, "transfer status changed", "transfer", t, "from", res.from, "reason", t.Reason)
+	if tr := res.transfer; tr.Status != res.from {
+		s.metrics.StatusChanged(res.from, tr.Status, tr.UpdatedAt.Sub(tr.CreatedAt))
+		s.log.InfoContext(ctx, "transfer status changed", "transfer", tr, "from", res.from, "reason", tr.Reason)
 	}
 	return nil
 }

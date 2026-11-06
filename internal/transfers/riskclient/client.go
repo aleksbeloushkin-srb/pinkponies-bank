@@ -12,7 +12,8 @@
 //	200 approve or decline          a decision            approve, decline
 //	202 review                      "ask again later"     review
 //	429                             not executed; retry   rate_limited
-//	                                after Retry-After
+//	                                after Retry-After,
+//	                                cut to MaxRetryAfter
 //	dial error, nothing written     not executed          unavailable
 //	timeout, reset, 5xx, 408, 409,  may have executed     ambiguous
 //	425, unreadable 2xx
@@ -95,6 +96,10 @@ type Config struct {
 	// CallTimeout bounds one call; the effective deadline is the earlier of
 	// this and the caller's.
 	CallTimeout time.Duration
+	// MaxRetryAfter caps the wait a 429 may ask for. The header comes from
+	// outside: a maintenance page saying "an hour", or a date years ahead,
+	// must not park a saga step that holds money.
+	MaxRetryAfter time.Duration
 }
 
 // Client calls the screening provider.
@@ -110,6 +115,9 @@ func New(cfg Config, hc *http.Client, m *Metrics) (*Client, error) {
 	base, err := url.Parse(cfg.BaseURL)
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
 		return nil, fmt.Errorf("riskclient: invalid base URL %q", cfg.BaseURL)
+	}
+	if cfg.CallTimeout <= 0 || cfg.MaxRetryAfter <= 0 {
+		return nil, errors.New("riskclient: CallTimeout and MaxRetryAfter must be positive")
 	}
 	return &Client{endpoint: base.JoinPath("screenings").String(), http: hc, metrics: m, cfg: cfg}, nil
 }
@@ -177,10 +185,10 @@ func (c *Client) screen(ctx context.Context, req app.ScreeningRequest) (app.Scre
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
 		_ = resp.Body.Close()
 	}()
-	return classify(resp)
+	return c.classify(resp)
 }
 
-func classify(resp *http.Response) (app.Screening, string, error) {
+func (c *Client) classify(resp *http.Response) (app.Screening, string, error) {
 	code := resp.StatusCode
 	switch {
 	case code == http.StatusOK || code == http.StatusAccepted:
@@ -202,7 +210,7 @@ func classify(resp *http.Response) (app.Screening, string, error) {
 		}
 		return app.Screening{}, outcomeAmbiguous, unavailable(fmt.Sprintf("status %d with decision %q", code, body.Decision), nil)
 	case code == http.StatusTooManyRequests:
-		after := retryAfter(resp.Header.Get("Retry-After"))
+		after := min(retryAfter(resp.Header.Get("Retry-After")), c.cfg.MaxRetryAfter)
 		return app.Screening{}, outcomeRateLimited, &app.RetryAfterError{
 			After: after,
 			Err:   unavailable(fmt.Sprintf("rate limited, retry after %s", after), nil),

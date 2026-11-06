@@ -45,6 +45,7 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"call budget", []string{"TRANSFERS_RISK_TIMEOUT=12s"}, "TASK_TIMEOUT must exceed LEDGER_TIMEOUT and RISK_TIMEOUT"},
 		{"screen bound", []string{"TRANSFERS_SCREEN_MAX_FAILURES=20"}, "TASK_MAX_ATTEMPTS must exceed SCREEN_MAX_FAILURES"},
 		{"hold ttl", []string{"TRANSFERS_HOLD_TTL=5m"}, "HOLD_TTL must exceed SCREEN_REVIEW_TIMEOUT"},
+		{"retry-after cap", []string{"TRANSFERS_RISK_MAX_RETRY_AFTER=5m"}, "RISK_MAX_RETRY_AFTER must be shorter than SCREEN_REVIEW_TIMEOUT"},
 		{"pool", []string{"TRANSFERS_DB_MAX_CONNS=6"}, "WORKER_CONCURRENCY must be at most"},
 		{"poll bounds", []string{"TRANSFERS_SCREEN_POLL_MIN=1m"}, "SCREEN_POLL_MIN must not exceed"},
 		{"admin port", []string{"TRANSFERS_ADMIN_ADDR=:8080"}, "ADMIN_ADDR must differ"},

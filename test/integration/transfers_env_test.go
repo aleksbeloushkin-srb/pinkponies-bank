@@ -88,7 +88,7 @@ func newSagaEnv(t *testing.T, opts sagaOptions) *sagaEnv {
 	e.risk = fakerisk.New(fakerisk.Config{ReviewDelay: 10 * time.Second, RetryAfter: time.Second, Faults: opts.riskFaults}, e.clock, discard())
 	riskSrv := httptest.NewServer(e.risk.Handler())
 	e.riskURL = riskSrv.URL
-	screener, err := riskclient.New(riskclient.Config{BaseURL: riskSrv.URL, CallTimeout: opts.riskTimeout}, riskSrv.Client(), riskclient.NewMetrics(prometheus.NewRegistry()))
+	screener, err := riskclient.New(riskclient.Config{BaseURL: riskSrv.URL, CallTimeout: opts.riskTimeout, MaxRetryAfter: time.Minute}, riskSrv.Client(), riskclient.NewMetrics(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
 	}
