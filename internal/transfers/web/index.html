@@ -40,10 +40,12 @@
       <h2 id="send-title">Send ponies</h2>
       <form id="send-form" novalidate>
         <label>From
-          <select name="source" required></select>
+          <select name="source" required aria-describedby="source-balance"></select>
+          <span class="balance" id="source-balance"></span>
         </label>
         <label>To
-          <select name="destination" required></select>
+          <select name="destination" required aria-describedby="destination-balance"></select>
+          <span class="balance" id="destination-balance"></span>
         </label>
         <label>Amount
           <input name="amount" value="12.50" inputmode="decimal" required autocomplete="off" aria-describedby="amount-hint">

@@ -63,6 +63,7 @@ input, select, button {
 }
 input, select { width: 100%; min-width: 0; }
 label.inline select { width: auto; }
+label .balance { font-weight: 400; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
 
 button {
   background: var(--deep-rose);
@@ -169,7 +170,7 @@ form .note { margin: 0; min-height: 0; }
 footer { max-width: 48rem; margin: 0 auto; padding: 1rem; color: var(--muted); font-size: 0.85rem; }
 
 @media (min-width: 40rem) {
-  form { grid-template-columns: 1fr 1fr 10rem; align-items: end; }
+  form { grid-template-columns: 1fr 1fr 10rem; align-items: start; }
   form button[type="submit"] { grid-column: 1 / -1; justify-self: start; }
   form .hint, form .note { grid-column: 1 / -1; }
   .site-header { padding-top: 2rem; }

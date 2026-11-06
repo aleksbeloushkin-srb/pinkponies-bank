@@ -101,18 +101,31 @@ function renderAccounts(before) {
   fillSelect(document.querySelector('[name="source"]'), 0);
   fillSelect(document.querySelector('[name="destination"]'), 1);
   fillSelect(byId('feed-account'), 0);
+  showBalances();
 }
 
+// Options carry the name only, so they fit a narrow select; the balance of
+// the chosen account is a line of its own under it.
 function fillSelect(select, defaultIndex) {
   const keep = select.value;
   select.replaceChildren(...accounts.map((a) => {
     const o = document.createElement('option');
     o.value = a.id;
-    o.textContent = `${a.name} (${formatAmount(a.available_minor, a.currency)} available)`;
+    o.textContent = a.name;
     return o;
   }));
   if (accounts.some((a) => a.id === keep)) select.value = keep;
   else if (accounts[defaultIndex]) select.value = accounts[defaultIndex].id;
+}
+
+function showBalances() {
+  for (const name of ['source', 'destination']) {
+    const a = accounts.find((acc) => acc.id === document.querySelector(`[name="${name}"]`).value);
+    byId(`${name}-balance`).textContent = a ? `Available: ${formatAmount(a.available_minor, a.currency)}` : '';
+  }
+}
+for (const name of ['source', 'destination']) {
+  document.querySelector(`[name="${name}"]`).addEventListener('change', showBalances);
 }
 
 // Several transfers can finish at once; refresh the balances once.
