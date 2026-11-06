@@ -89,9 +89,13 @@ type Config struct {
 	Batch int
 	// Lease is how long claimed events stay invisible to other relays.
 	Lease time.Duration
-	// PublishTimeout bounds one delivery. A delivery starts only if it can
-	// finish before the lease expires.
+	// PublishTimeout is the deadline of one delivery's context.
 	PublishTimeout time.Duration
+	// DeliveryBound is the longest one delivery can take once started, at
+	// least PublishTimeout: a Kafka client may wait past its context for
+	// the answer to a request already sent (see kafkapub.DeliveryBound). A
+	// delivery starts only if it can finish before the lease expires.
+	DeliveryBound time.Duration
 }
 
 // Relay moves events from the outbox to a Publisher.
@@ -154,10 +158,11 @@ func (r *Relay) RunOnce(ctx context.Context) (int, error) {
 		published []int64
 		pubErr    error
 	)
+	bound := max(r.cfg.DeliveryBound, r.cfg.PublishTimeout)
 	for _, rec := range records {
 		// Starting a delivery that could outlive the lease would let another
 		// relay claim and publish the same event at the same time.
-		if r.clock.Now().Add(r.cfg.PublishTimeout).After(leaseEnd) {
+		if r.clock.Now().Add(bound).After(leaseEnd) {
 			break
 		}
 		if err := r.publish(ctx, rec); err != nil {

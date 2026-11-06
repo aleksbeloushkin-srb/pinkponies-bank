@@ -145,6 +145,24 @@ func TestRelayStopsBeforeTheLeaseRunsOut(t *testing.T) {
 	}
 }
 
+// The lease must fit the longest a delivery can take, not only its
+// context deadline: a request in flight outlives the deadline.
+func TestRelaySizesTheLeaseByTheDeliveryBound(t *testing.T) {
+	clock := newClock()
+	store := &fakeStore{pending: records(1, 2, 3, 4, 5)}
+	pub := &fakePublisher{clock: clock} // every delivery takes 20 s
+	cfg := testConfig
+	cfg.DeliveryBound = 25 * time.Second
+
+	n, err := NewRelay(store, pub, clock, nil, NewMetrics(prometheus.NewRegistry()), cfg, slog.New(slog.NewTextHandler(io.Discard, nil))).RunOnce(context.Background())
+
+	// Lease 60 s, bound 25 s: deliveries start at 0 and 20 s; at 40 s a
+	// third could end after the lease.
+	if err != nil || n != 2 || !slices.Equal(store.released, []int64{3, 4, 5}) {
+		t.Fatalf("RunOnce = %d, %v, released %v; want 2 and [3 4 5]", n, err, store.released)
+	}
+}
+
 // A wake-up starts a batch without waiting for the tick.
 func TestRelayWakesOnSignal(t *testing.T) {
 	store := &fakeStore{claims: make(chan struct{})}
