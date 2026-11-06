@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -293,6 +295,41 @@ func TestNotificationsStoreClassifiesRefusals(t *testing.T) {
 	cancel()
 	if _, err := store.MarkProcessed(gone, processed); err == nil || errors.Is(err, notifications.ErrInvalidEvent) {
 		t.Fatalf("a cancelled statement = %v, want a transient error", err)
+	}
+}
+
+// A delivery's long error text is cut on a rune boundary, or PostgreSQL
+// refuses the attempt. As in the queue's test, the three prefixes make any
+// byte cut split a rune at least twice.
+func TestNotificationsErrorTextIsCutOnARuneBoundary(t *testing.T) {
+	newNotificationsEnv(t)
+	ctx := context.Background()
+	tx := txctx.New(notificationsDB)
+	store := notificationspg.NewStore(tx)
+	ev := completedEvent()
+	n := notifications.Notification{ID: uuid.New(), EventID: ev.ID, AccountID: uuid.New(), TransferID: ev.Transfer.ID,
+		Kind: notifications.KindSent, Message: "sent", CreatedAt: time.Now()}
+	if err := tx.Run(ctx, func(ctx context.Context) error {
+		if _, err := store.MarkProcessed(ctx, app.ProcessedEvent{EventID: ev.ID, TransferID: ev.Transfer.ID, Type: string(ev.Type), Topic: "t"}); err != nil {
+			return err
+		}
+		return store.InsertNotification(ctx, n, []string{"webhook"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, prefix := range []string{"", "x", "xx"} {
+		cause := prefix + strings.Repeat("€", 1000)
+		if err := store.RecordAttempt(ctx, n.ID, "webhook", app.Attempt{Number: i + 1, Err: errors.New(cause), At: time.Now()}); err != nil {
+			t.Fatalf("RecordAttempt with a %d-byte error: %v", len(cause), err)
+		}
+		var stored string
+		if err := notificationsDB.QueryRow(ctx,
+			`SELECT error FROM delivery_attempts WHERE notification_id = $1 AND attempt = $2`, n.ID, i+1).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if !utf8.ValidString(stored) || !strings.HasPrefix(cause, stored) || stored == "" || stored == cause {
+			t.Fatalf("stored error: %d of %d bytes, valid UTF-8 %v", len(stored), len(cause), utf8.ValidString(stored))
+		}
 	}
 }
 

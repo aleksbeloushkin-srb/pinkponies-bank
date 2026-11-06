@@ -5,10 +5,12 @@ package integration
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -210,6 +212,33 @@ func TestQueueCrashLoopGoesDead(t *testing.T) {
 	if state != "dead" || runs.Load() != 0 {
 		t.Fatalf("after %d runs that never settled: state=%s attempts=%d runs=%d, want dead without running",
 			cfg.MaxAttempts, state, attempts, runs.Load())
+	}
+}
+
+// A long error text is cut on a rune boundary. PostgreSQL refuses invalid
+// UTF-8, and a refused settle would leave the task to run again. With one,
+// two and three bytes before the three-byte runes, a byte cut of any length
+// splits a rune in at least two of the three cases.
+func TestQueueErrorTextIsCutOnARuneBoundary(t *testing.T) {
+	q, c := newQueue(t)
+	for _, prefix := range []string{"", "x", "xx"} {
+		enqueue(t, q, c, 1)
+		tasks, err := q.Claim(context.Background(), c.Now(), 1, queueConfig().Lease)
+		if err != nil || len(tasks) != 1 {
+			t.Fatalf("claim = %+v, %v", tasks, err)
+		}
+		cause := prefix + strings.Repeat("€", 2000)
+		if err := q.Retry(context.Background(), tasks[0], c.Now().Add(time.Hour), cause); err != nil {
+			t.Fatalf("Retry with a %d-byte cause: %v", len(cause), err)
+		}
+		var stored string
+		if err := transfersDB.QueryRow(context.Background(),
+			`SELECT last_error FROM tasks WHERE id = $1`, tasks[0].ID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if !utf8.ValidString(stored) || !strings.HasPrefix(cause, stored) || stored == "" || stored == cause {
+			t.Fatalf("last_error: %d of %d bytes, valid UTF-8 %v", len(stored), len(cause), utf8.ValidString(stored))
+		}
 	}
 }
 
