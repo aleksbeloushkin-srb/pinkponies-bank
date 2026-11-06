@@ -66,7 +66,7 @@ fix.
 | F1 | franz-go measures `RecordDeliveryTimeout` from the record's `Timestamp`. The publisher first stamped records with the event's creation time: after any broker outage longer than the publish timeout, every backlogged event would have timed out the moment it was produced, and the relay would have stopped for good. The integration test failed at once because its clock is fixed in the past | the timestamp is left to the client; a unit test pins it | [publisher.go:45](../internal/transfers/kafkapub/publisher.go#L45) |
 | F2 | `kadm.Client.Lag` computes the lag of a group with no members only over committed partitions. A stopped consumer that had not committed showed zero lag: the `ConsumerLag` alert was blind exactly when it should fire | the collector computes lag from committed, start and end offsets; an integration test stops a consumer mid-failure and expects lag 1 | [collector.go:136](../internal/platform/kafka/collector.go#L136) |
 | F3 | `GaugesUnreadable` added three counter vectors; a service that exports only one of them (the ledger) matched no series, so the alert could never fire for it. The first promtool test fed all three counters and passed | one `__name__` regex selector; the test feeds a single counter | [alerts.yml:105](../deploy/prometheus/alerts.yml#L105) |
-| F4 | `Worker.Run` checked `StopClaiming` only after its first claim, so a worker stopped before it started still claimed one batch | the stop flag is checked before every claim. The first test of it stopped the worker before `Run` reached a claim, so it passed with `StopClaiming` doing nothing (R5 below); it now stops an idle worker and wakes it with work waiting | [worker.go:130](../internal/platform/taskqueue/worker.go#L130), [worker_test.go:353](../internal/platform/taskqueue/worker_test.go#L353) |
+| F4 | `Worker.Run` checked `StopClaiming` only after its first claim, so a worker stopped before it started still claimed one batch | the stop flag is checked before every claim. The first test of it stopped the worker before `Run` reached a claim, so it passed with `StopClaiming` doing nothing (R5 below); it now stops an idle worker and wakes it with work waiting | [worker.go:130](../internal/platform/taskqueue/worker.go#L130), [worker_test.go:357](../internal/platform/taskqueue/worker_test.go#L357) |
 | F5 | `grpc.Server.GracefulStop` waits for running handlers even after `Stop`; a handler that ignored its context made the forced fallback hang | documented; handlers respect their context (every database call does), and the test uses such a handler | [grpcserver.go:61](../internal/ledger/grpcapi/grpcserver.go#L61) |
 | F6 | The ledger's error reasons were first constants in the ledger's gRPC package; the transfers client would have had to import ledger internals | the reasons are the `ErrorReason` enum of the proto; `TestServicesDoNotImportEachOther` guards the rule | [ledger.proto:59](../api/proto/ledger/v1/ledger.proto#L59) |
 | F7 | The PostgreSQL health check (`pg_isready`) passed while the init script ran on the socket-only first-start server, which then restarts | the check queries the last database over TCP | [docker-compose.yml:17](../docker-compose.yml#L17) |
@@ -123,15 +123,18 @@ What was run for this version, on macOS (arm64) with Docker in a colima VM
 | --- | --- | --- |
 | `gofmt -s -l .` | empty | empty |
 | `go vet ./...`, with and without `-tags integration` | clean | clean |
+| `go mod tidy -diff` | clean | clean |
 | staticcheck 2025.1.1 `-checks all`, both tag sets | clean | not run (staticcheck built with 1.24.7) |
-| `go test -race -count=3 ./...` (30 packages) | pass | pass |
-| `go test -race -tags integration ./...` (testcontainers) | pass, about 35 s | pass, about 35 s |
-| `-cpu=2 -count=200`, unit: every saga crash point (72 cases), consumer and deduplication, task queue, ledger invariants | pass | pass |
-| `-cpu=2 -count=200`, integration: 100 concurrent transfers, racing holds, concurrent replays | pass (109 s) | not run |
-| `-cpu=2 -count=200`, integration: saga crash points against PostgreSQL and the ledger over gRPC (36 cases, 7200 runs) | pass (590 s) | not run |
-| `-cpu=2 -count=20`, integration: consumer duplicate, poison to the DLQ, offset not committed, against Redpanda | pass (285 s) | not run |
+| `go test -race -count=3 ./...` (31 packages) | pass | pass |
+| `go test -race -tags integration ./...` (testcontainers, 28 tests) | pass, about 40 s | pass, about 40 s |
+| `-race -cpu=2 -count=200`, unit: every saga crash point (72 cases), consumer and deduplication, task queue, ledger invariants, relay, long polling | pass | pass |
+| `-race -cpu=2 -count=200`, integration: saga crash points against PostgreSQL and the ledger over gRPC (36 cases), the screening hang, 100 concurrent transfers, racing holds, concurrent replays, the task queue | pass (1071 s) | pass (1076 s) |
+| `-race -cpu=2 -count=20`, integration: consumer, poison and refused events to the DLQ, offset not committed, the pipeline, the relay, the notifications store | pass (455 s) | pass (458 s) |
+| every regression test of the independent review, with its fix reverted | | fails (35 of 35 reverts) |
 | promtool: config check, 11 rules, 12 rule test groups | pass | |
 | `scripts/e2e.sh` with `docker compose up --build`, then `down -v` | 73 checks pass | |
 
-The integration stress runs used Go 1.24.7 only, to keep the VM's two
-CPUs for one suite at a time; the same tests pass once on Go 1.27.3.
+The stress runs found two test problems, both fixed: the first version of
+the `StopClaiming` test could take the task it added (3 failures in 3000
+runs), and the Kafka tests left their topics behind until a long run hit
+the broker's partition limit.
