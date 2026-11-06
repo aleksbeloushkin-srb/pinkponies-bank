@@ -188,6 +188,24 @@ func TestClientGoneIs499(t *testing.T) {
 	}
 }
 
+// A browser that leaves /v1/accounts cancels the ledger call; whatever
+// the ledger client then reports, it is not a ledger outage and not a 503.
+func TestClientGoneDuringAccountsIs499(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("%w: Canceled: context canceled: %w", app.ErrLedgerUnavailable, context.Canceled),
+		fmt.Errorf("%w: Canceled: context canceled", app.ErrLedgerUnavailable),
+	} {
+		h := newHandler(&fakeService{listErr: err})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/accounts", nil).WithContext(ctx))
+		if rec.Code != httpserver.StatusClientClosedRequest {
+			t.Fatalf("%v: code = %d, want 499", err, rec.Code)
+		}
+	}
+}
+
 func TestAccountsAndUI(t *testing.T) {
 	svc := &fakeService{accounts: []app.Account{{ID: uuid.New(), Name: "Clover", Currency: "EUR", PostedMinor: 10, AvailableMinor: 7, HeldMinor: 3}}}
 	h := newHandler(svc)

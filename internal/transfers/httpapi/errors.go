@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -22,6 +21,12 @@ func writeError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err er
 		maxBytes *http.MaxBytesError
 	)
 	switch {
+	case r.Context().Err() != nil:
+		// The client has gone, and whatever failed failed because of it, or
+		// nobody reads the answer anyway. 499 only reaches the access log
+		// and the metrics, not the 5xx rate.
+		log.DebugContext(r.Context(), "client went away", "err", err)
+		w.WriteHeader(httpserver.StatusClientClosedRequest)
 	case errors.As(err, &verr):
 		httpserver.WriteError(w, http.StatusBadRequest, "invalid_argument", verr.Error(), verr.Field)
 	case errors.As(err, &berr):
@@ -42,11 +47,6 @@ func writeError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err er
 		log.WarnContext(r.Context(), "ledger unavailable", "err", err)
 		w.Header().Set("Retry-After", "1")
 		httpserver.WriteError(w, http.StatusServiceUnavailable, "upstream_unavailable", "the ledger is unavailable, retry shortly", "")
-	case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
-		// The client has gone; nobody reads the response. 499 only reaches
-		// the access log and the metrics.
-		log.DebugContext(r.Context(), "client went away", "err", err)
-		w.WriteHeader(httpserver.StatusClientClosedRequest)
 	default:
 		log.ErrorContext(r.Context(), "request failed", "err", err)
 		httpserver.WriteError(w, http.StatusInternalServerError, "internal", "internal error", "")

@@ -144,12 +144,14 @@ func (c *Client) Accounts(ctx context.Context) ([]app.Account, error) {
 }
 
 // call runs one RPC with its own deadline. A replay (AlreadyExists) is
-// turned into the original response attached to it.
+// turned into the original response attached to it. When the caller's
+// context ended first, the error wraps its cause as well, so the caller
+// can tell "the client has gone" from "the ledger is down".
 func call[Req, Resp proto.Message](ctx context.Context, c *Client,
 	rpc func(context.Context, Req, ...grpc.CallOption) (Resp, error), req Req) (Resp, bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.CallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, c.cfg.CallTimeout)
 	defer cancel()
-	resp, err := rpc(ctx, req)
+	resp, err := rpc(callCtx, req)
 	if err == nil {
 		return resp, false, nil
 	}
@@ -157,6 +159,9 @@ func call[Req, Resp proto.Message](ctx context.Context, c *Client,
 		return original, true, nil
 	}
 	var zero Resp
+	if cause := context.Cause(ctx); cause != nil {
+		return zero, false, fmt.Errorf("%w: %w", classify(err), cause)
+	}
 	return zero, false, classify(err)
 }
 

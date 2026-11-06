@@ -124,6 +124,7 @@ func TestStatusCodesMapToErrorClasses(t *testing.T) {
 		{"unavailable", status.Error(codes.Unavailable, "down"), app.ErrLedgerUnavailable},
 		{"aborted", status.Error(codes.Aborted, "deadlock victim"), app.ErrLedgerUnavailable},
 		{"internal", status.Error(codes.Internal, "bug"), app.ErrLedgerUnavailable},
+		{"canceled", status.Error(codes.Canceled, "server gave up"), app.ErrLedgerUnavailable},
 		{"replay without the original", status.Error(codes.AlreadyExists, "replay"), app.ErrLedgerContract},
 		{"unimplemented", status.Error(codes.Unimplemented, "old server"), app.ErrLedgerContract},
 	}
@@ -135,6 +136,23 @@ func TestStatusCodesMapToErrorClasses(t *testing.T) {
 				t.Fatalf("err = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+// A call whose caller has gone keeps the class the saga retries on, and
+// also the caller's cause, so an API handler can tell a client that left
+// from a ledger that is down.
+func TestCallerCancelKeepsItsCause(t *testing.T) {
+	c, _ := start(t, &fakeLedger{block: true}, time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.PlaceHold(ctx, holdRequest())
+	if !errors.Is(err, app.ErrLedgerUnavailable) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want ErrLedgerUnavailable and context.Canceled", err)
+	}
+	c, _ = start(t, &fakeLedger{err: status.Error(codes.Unavailable, "down")}, time.Minute)
+	if _, err := c.PlaceHold(context.Background(), holdRequest()); errors.Is(err, context.Canceled) {
+		t.Fatalf("a live caller's failure = %v must not look cancelled", err)
 	}
 }
 
