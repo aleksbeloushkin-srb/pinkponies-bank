@@ -179,6 +179,18 @@ func (c *Checks) Positive(durations map[string]time.Duration) {
 	}
 }
 
+// DBTimeouts checks the relations between the server-side limits every
+// service sets on its database sessions (DB_STATEMENT_TIMEOUT,
+// DB_LOCK_TIMEOUT, DB_IDLE_IN_TX_TIMEOUT).
+func (c *Checks) DBTimeouts(statement, lock, idleInTx time.Duration) {
+	// A lock wait that outlasts the statement limit is reported as a
+	// statement timeout instead of a lock timeout, hiding the contention.
+	c.Check(lock < statement, "DB_LOCK_TIMEOUT must be shorter than DB_STATEMENT_TIMEOUT")
+	// Code that runs between the statements of a transaction is short; a
+	// limit below one statement's would hide a stuck client behind slow SQL.
+	c.Check(idleInTx > statement, "DB_IDLE_IN_TX_TIMEOUT must exceed DB_STATEMENT_TIMEOUT")
+}
+
 // Err returns the collected failures, or nil.
 func (c *Checks) Err() error {
 	return errors.Join(c.errs...)

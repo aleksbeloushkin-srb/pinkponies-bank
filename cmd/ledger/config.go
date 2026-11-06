@@ -97,8 +97,6 @@ func (c config) validate() error {
 	ch.Check(c.DBMaxConns >= 2 && c.DBMaxConns <= 1000, "DB_MAX_CONNS must be between 2 and 1000")
 	ch.Check(c.SweepBatch >= 1 && c.SweepBatch <= 10_000, "SWEEP_BATCH must be between 1 and 10000")
 	ch.Check(c.HoldDefaultTTL <= c.HoldMaxTTL, "HOLD_DEFAULT_TTL must not exceed HOLD_MAX_TTL")
-	// A lock wait that outlasts the statement limit would be reported as a
-	// statement timeout instead of a lock timeout, hiding the contention.
-	ch.Check(c.DBLockTimeout < c.DBStatementTimeout, "DB_LOCK_TIMEOUT must be shorter than DB_STATEMENT_TIMEOUT")
+	ch.DBTimeouts(c.DBStatementTimeout, c.DBLockTimeout, c.DBIdleInTxTimeout)
 	return ch.Err()
 }

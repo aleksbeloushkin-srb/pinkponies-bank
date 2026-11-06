@@ -41,6 +41,9 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"delivery bound", []string{"NOTIFICATIONS_DELIVERY_MAX_ATTEMPTS=12"}, "TASK_MAX_ATTEMPTS must exceed DELIVERY_MAX_ATTEMPTS"},
 		{"webhook budget", []string{"NOTIFICATIONS_WEBHOOK_TIMEOUT=6s"}, "TASK_TIMEOUT must exceed WEBHOOK_TIMEOUT"},
 		{"bool", []string{"NOTIFICATIONS_SINK_ENABLED=yes"}, `"yes" is not true or false`},
+		{"repeated channel", []string{"NOTIFICATIONS_CHANNELS=log,webhook,log"}, `CHANNELS: "log" is listed twice`},
+		{"unknown sink fault", []string{"NOTIFICATIONS_SINK_ENABLED=true", "NOTIFICATIONS_SINK_FAULTS=500,teapot"}, `SINK_FAULTS: unknown sink fault "teapot"`},
+		{"lock vs statement", []string{"NOTIFICATIONS_DB_LOCK_TIMEOUT=5s"}, "DB_LOCK_TIMEOUT must be shorter"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

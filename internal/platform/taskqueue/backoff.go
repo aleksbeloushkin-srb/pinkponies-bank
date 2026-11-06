@@ -18,15 +18,22 @@ type Backoff struct {
 
 // Delay returns the wait before the given attempt (1 for the first retry).
 func (b Backoff) Delay(attempt int) time.Duration {
-	d := b.Base
-	for i := 1; i < attempt && d < b.Max; i++ {
-		d *= 2
-	}
-	d = min(d, b.Max)
+	d := b.Ceiling(attempt)
 	half := d / 2
 	randN := b.Rand
 	if randN == nil {
 		randN = rand.Int64N
 	}
 	return half + time.Duration(randN(int64(half)+1))
+}
+
+// Ceiling returns the longest wait Delay can return for attempt. Budgets
+// that must hold in the worst case, such as a hold's time to live, add up
+// ceilings.
+func (b Backoff) Ceiling(attempt int) time.Duration {
+	d := b.Base
+	for i := 1; i < attempt && d < b.Max; i++ {
+		d *= 2
+	}
+	return min(d, b.Max)
 }

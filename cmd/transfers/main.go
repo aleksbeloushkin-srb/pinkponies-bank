@@ -200,6 +200,7 @@ func run(ctx context.Context, stopSignals context.CancelFunc, cfg config, log *s
 			Batch:          cfg.RelayBatch,
 			Lease:          cfg.RelayLease,
 			PublishTimeout: cfg.PublishTimeout,
+			DeliveryBound:  kafkapub.DeliveryBound(cfg.PublishTimeout),
 		}, log)
 		bg.Go("outbox-relay", relay.Run)
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	eventsv1 "github.com/aleksbeloushkin-srb/pinkponies-bank/api/events/v1"
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/notifications/httpapi"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform"
 )
 
@@ -161,8 +162,11 @@ func (c config) validate() error {
 	ch.Check(c.DeliveryMaxAttempts >= 1, "DELIVERY_MAX_ATTEMPTS must be at least 1")
 	ch.Check(c.WorkerConcurrency >= 1, "WORKER_CONCURRENCY must be at least 1")
 	ch.Check(len(c.Channels) > 0, "CHANNELS must name at least one channel")
-	for _, name := range c.Channels {
+	for i, name := range c.Channels {
 		ch.Check(slices.Contains(knownChannels, name), "CHANNELS: unknown channel %q (want %v)", name, knownChannels)
+		// A repeated channel would make two deliveries of every
+		// notification on it, and the second breaks the deliveries key.
+		ch.Check(!slices.Contains(c.Channels[:i], name), "CHANNELS: %q is listed twice", name)
 	}
 	if slices.Contains(c.Channels, "webhook") {
 		ch.Check(validHTTPURL(c.WebhookURL), "WEBHOOK_URL must be an http(s) URL when the webhook channel is on")
@@ -171,8 +175,12 @@ func (c config) validate() error {
 		ch.Check(validOrigin(o), "CORS_ORIGINS: %q is not an origin like http://localhost:8080", o)
 	}
 	ch.Check(c.SinkEnabled || len(c.SinkFaults) == 0, "SINK_FAULTS needs SINK_ENABLED=true")
+	if err := httpapi.CheckSinkFaults(c.SinkFaults); err != nil {
+		ch.Check(false, "SINK_FAULTS: %v", err)
+	}
 
 	// Relations between settings: each one guards a failure mode.
+	ch.DBTimeouts(c.DBStatementTimeout, c.DBLockTimeout, c.DBIdleInTxTimeout)
 	ch.Check(c.WebhookTimeout+5*time.Second <= c.TaskTimeout,
 		"TASK_TIMEOUT must exceed WEBHOOK_TIMEOUT by at least 5s: a delivery is one call and two statements")
 	ch.Check(c.TaskTimeout+10*time.Second <= c.TaskLease,

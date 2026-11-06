@@ -38,7 +38,7 @@ const (
 
 // NewSink returns a sink with an initial fault queue.
 func NewSink(faults []string) (*Sink, error) {
-	if err := checkFaults(faults); err != nil {
+	if err := CheckSinkFaults(faults); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -49,7 +49,9 @@ func NewSink(faults []string) (*Sink, error) {
 // starts.
 func (s *Sink) Close() { s.cancel() }
 
-func checkFaults(faults []string) error {
+// CheckSinkFaults reports an unknown fault name; the configuration checks
+// it at start.
+func CheckSinkFaults(faults []string) error {
 	for _, f := range faults {
 		if f != SinkFault500 && f != SinkFaultHang {
 			return fmt.Errorf("unknown sink fault %q (want 500 or hang)", f)
@@ -132,7 +134,7 @@ func (s *Sink) control(w http.ResponseWriter, r *http.Request) {
 			faults = append(faults, f)
 		}
 	}
-	if err := checkFaults(faults); err != nil {
+	if err := CheckSinkFaults(faults); err != nil {
 		httpserver.WriteError(w, http.StatusBadRequest, "invalid_argument", err.Error(), "faults")
 		return
 	}

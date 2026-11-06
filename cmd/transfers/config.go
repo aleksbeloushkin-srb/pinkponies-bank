@@ -8,6 +8,8 @@ import (
 
 	eventsv1 "github.com/aleksbeloushkin-srb/pinkponies-bank/api/events/v1"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform"
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/taskqueue"
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/transfers/kafkapub"
 )
 
 // envPrefix scopes the variables of the transfers service.
@@ -139,9 +141,10 @@ func loadConfig(environ []string) (config, error) {
 		TaskRetryBase:   l.Duration("TASK_RETRY_BASE", 500*time.Millisecond),
 		TaskRetryMax:    l.Duration("TASK_RETRY_MAX", 30*time.Second),
 
-		// Bounds the money a stuck transfer blocks; longer than the longest
-		// review plus a capture.
-		HoldTTL: l.Duration("HOLD_TTL", 15*time.Minute),
+		// Bounds the money a stuck transfer blocks. It must outlast the worst
+		// case of the hold, screen and capture steps (holdBudget, about 22
+		// minutes with these defaults).
+		HoldTTL: l.Duration("HOLD_TTL", 30*time.Minute),
 		// Failed calls with the same key before the hold is released.
 		ScreenMaxFailures: l.Int("SCREEN_MAX_FAILURES", 6),
 		// A review longer than this cancels the transfer.
@@ -166,7 +169,7 @@ func loadConfig(environ []string) (config, error) {
 		RelayInterval: l.Duration("RELAY_INTERVAL", 500*time.Millisecond),
 		RelayBatch:    l.Int("RELAY_BATCH", 50),
 		// Claimed events stay hidden from other relays this long; a delivery
-		// starts only if it can finish inside the lease.
+		// starts only if it can finish inside the lease (see the check below).
 		RelayLease: l.Duration("RELAY_LEASE", time.Minute),
 		// A broker slower than this to acknowledge counts as failed.
 		PublishTimeout: l.Duration("PUBLISH_TIMEOUT", 5*time.Second),
@@ -240,14 +243,15 @@ func (c config) validate() error {
 		"TASK_MAX_ATTEMPTS must exceed SCREEN_MAX_FAILURES, or a failing screening goes dead instead of releasing its hold")
 	ch.Check(c.RiskMaxRetryAfter < c.ScreenReviewTimeout,
 		"RISK_MAX_RETRY_AFTER must be shorter than SCREEN_REVIEW_TIMEOUT, or one 429 uses up the screening's whole time")
-	ch.Check(c.HoldTTL >= c.ScreenReviewTimeout+time.Minute,
-		"HOLD_TTL must exceed SCREEN_REVIEW_TIMEOUT by at least 1m, or approved transfers find their hold expired")
+	ch.Check(c.HoldTTL >= c.holdBudget(),
+		"HOLD_TTL must be at least %s with these settings (the worst case of the hold, screen and capture steps), or an approved transfer can find its hold expired",
+		c.holdBudget().Round(time.Second))
 	ch.Check(c.WorkerConcurrency+3 <= c.DBMaxConns,
 		"WORKER_CONCURRENCY must be at most DB_MAX_CONNS-3, leaving connections for the API and the batcher")
-	ch.Check(c.DBIdleInTxTimeout > c.DBStatementTimeout,
-		"DB_IDLE_IN_TX_TIMEOUT must exceed DB_STATEMENT_TIMEOUT")
-	ch.Check(c.RelayLease >= 2*c.PublishTimeout,
-		"RELAY_LEASE must be at least twice PUBLISH_TIMEOUT, or the relay publishes almost nothing per batch")
+	ch.DBTimeouts(c.DBStatementTimeout, c.DBLockTimeout, c.DBIdleInTxTimeout)
+	ch.Check(c.RelayLease >= 2*kafkapub.DeliveryBound(c.PublishTimeout),
+		"RELAY_LEASE must be at least %s, twice the longest delivery (PUBLISH_TIMEOUT and the producer's request limits), or the relay publishes almost nothing per batch",
+		2*kafkapub.DeliveryBound(c.PublishTimeout))
 	if c.Roles.Relay {
 		ch.Check(len(c.KafkaBrokers) > 0, "KAFKA_BROKERS is required when the relay role is on")
 		ch.Check(c.KafkaTopic != "", "KAFKA_TOPIC must not be empty")
@@ -259,6 +263,29 @@ func (c config) validate() error {
 		ch.Check(validHTTPURL(c.UINotificationsURL), "UI_NOTIFICATIONS_URL must be an http(s) URL")
 	}
 	return ch.Err()
+}
+
+// stepBudget is the worst case of a ledger step (hold or capture) that
+// still succeeds: all TASK_MAX_ATTEMPTS runs use their whole TASK_TIMEOUT,
+// and between two runs the task waits the longest backoff and one idle
+// poll.
+func (c config) stepBudget() time.Duration {
+	b := taskqueue.Backoff{Base: c.TaskRetryBase, Max: c.TaskRetryMax}
+	d := c.TaskTimeout
+	for attempt := 1; attempt < c.TaskMaxAttempts; attempt++ {
+		d += b.Ceiling(attempt) + c.WorkerIdleInterval + c.TaskTimeout
+	}
+	return d
+}
+
+// holdBudget is how long a hold must live for an approved transfer to still
+// find it at capture. The time to live starts when the ledger places the
+// hold, so it covers the hold step's retries after a lost answer, the
+// screen step (SCREEN_REVIEW_TIMEOUT from its first run bounds it, plus
+// the run that approves) and the capture step's retries, with one idle poll
+// between steps.
+func (c config) holdBudget() time.Duration {
+	return 2*c.stepBudget() + c.ScreenReviewTimeout + c.TaskTimeout + 2*c.WorkerIdleInterval
 }
 
 func validHTTPURL(s string) bool {
