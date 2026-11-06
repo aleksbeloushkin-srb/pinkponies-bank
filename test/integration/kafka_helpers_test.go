@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/kafka"
@@ -24,6 +25,15 @@ func newTopic(t *testing.T, partitions int32) string {
 	if err := kafka.EnsureTopics(ctx, cl, kafka.Topic{Name: name, Partitions: partitions, ReplicationFactor: 1}); err != nil {
 		t.Fatal(err)
 	}
+	// The broker refuses new partitions past its per-core limit, which a
+	// long -count run reaches if every run leaves its topics behind.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := kadm.NewClient(cl).DeleteTopic(ctx, name); err != nil {
+			t.Logf("delete topic %s: %v", name, err)
+		}
+	})
 	return name
 }
 
