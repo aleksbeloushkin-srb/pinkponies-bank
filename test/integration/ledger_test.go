@@ -353,3 +353,52 @@ func TestLedgerDatabaseGuards(t *testing.T) {
 	}
 	checkLedgerBooks(t, 1_000)
 }
+
+// The overdue gauge sees only holds past their expiry, which is what a leak
+// is: an old hold within its TTL is healthy.
+func TestLedgerCollectorReportsOverdueHolds(t *testing.T) {
+	e := newLedgerEnv(t)
+	src, dst := e.open(t, "Clover", 10_000), e.open(t, "Pip", 0)
+	gauges := func() (active, overdue float64) {
+		t.Helper()
+		reg := prometheus.NewRegistry()
+		reg.MustRegister(ledgerpg.NewCollector(ledgerDB, 5*time.Second, discard()))
+		mfs, err := reg.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := 0
+		for _, mf := range mfs {
+			switch mf.GetName() {
+			case "ledger_holds_active":
+				active, found = mf.GetMetric()[0].GetGauge().GetValue(), found+1
+			case "ledger_hold_oldest_expired_seconds":
+				overdue, found = mf.GetMetric()[0].GetGauge().GetValue(), found+1
+			}
+		}
+		if found != 2 {
+			t.Fatalf("collector exported %d of 2 gauges", found)
+		}
+		return active, overdue
+	}
+	hold := func(key string) {
+		t.Helper()
+		if _, err := e.svc.PlaceHold(context.Background(), ledgerapp.PlaceHoldRequest{
+			IdempotencyKey: key, AccountID: src.ID, DestinationID: dst.ID, AmountMinor: 100, Currency: "EUR", TTL: time.Hour,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The database clock decides; the service clock places holds relative to it.
+	e.clock.Set(time.Now())
+	hold("fresh")
+	if active, overdue := gauges(); active != 1 || overdue != 0 {
+		t.Fatalf("a hold within its TTL: active %v, overdue %v; want 1 and 0", active, overdue)
+	}
+	e.clock.Set(time.Now().Add(-2 * time.Hour))
+	hold("expired an hour ago")
+	if active, overdue := gauges(); active != 2 || overdue < 3500 {
+		t.Fatalf("a hold an hour past its expiry: active %v, overdue %v", active, overdue)
+	}
+}

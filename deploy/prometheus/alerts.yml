@@ -52,14 +52,18 @@ groups:
 
   - name: ledger
     rules:
+      # A leaked hold is one older than its own time to live: the sweep
+      # (LEDGER_SWEEP_INTERVAL, 5s) should have released it. Comparing the
+      # age with a fixed number would page on holds whose callers chose a
+      # longer TTL.
       - alert: HoldLeak
-        expr: max(ledger_hold_oldest_active_seconds) > 900
-        for: 5m
+        expr: max(ledger_hold_oldest_expired_seconds) > 60
+        for: 2m
         labels:
           severity: page
         annotations:
-          summary: "A hold has been active for more than fifteen minutes"
-          runbook: "A transfer that holds money that long is stuck or forgot its hold: find the transfer by the hold's idempotency key. The expiry sweep releases the hold at its TTL."
+          summary: "An active hold is past its expiry and has not been released"
+          runbook: "The ledger's expiry sweep is not running or keeps failing: check the ledger's logs for the sweep and its database errors. The money stays unavailable until the hold is released."
       - alert: LedgerOutOfBalance
         expr: sum by (currency) (max by (currency, kind) (ledger_balance_sum_minor)) != 0
         for: 1m

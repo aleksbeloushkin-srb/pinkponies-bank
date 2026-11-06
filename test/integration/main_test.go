@@ -156,6 +156,12 @@ func (c *clock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+func (c *clock) Set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = t
+}
+
 func count(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) int64 {
 	t.Helper()
 	var n int64

@@ -108,20 +108,24 @@ tests:
 
   - interval: 1m
     input_series:
+      # An old hold within its TTL is healthy; one past its expiry for
+      # minutes is not.
       - series: 'ledger_hold_oldest_active_seconds{job="ledger"}'
-        values: '800 860 920 980 1040 1100 1160 1220 1280'
+        values: '1700 1760 1820 1880 1940 2000 2060 2120 2180'
+      - series: 'ledger_hold_oldest_expired_seconds{job="ledger"}'
+        values: '0 0 0 30 90 150 210 270 330'
     alert_rule_test:
       - eval_time: 4m
         alertname: HoldLeak
         exp_alerts: []
-      - eval_time: 8m
+      - eval_time: 7m
         alertname: HoldLeak
         exp_alerts:
           - exp_labels:
               severity: page
             exp_annotations:
-              summary: "A hold has been active for more than fifteen minutes"
-              runbook: "A transfer that holds money that long is stuck or forgot its hold: find the transfer by the hold's idempotency key. The expiry sweep releases the hold at its TTL."
+              summary: "An active hold is past its expiry and has not been released"
+              runbook: "The ledger's expiry sweep is not running or keeps failing: check the ledger's logs for the sweep and its database errors. The money stays unavailable until the hold is released."
 
   # Customer and system balances cancel out per currency, also with two
   # instances exporting them; a drift pages.
