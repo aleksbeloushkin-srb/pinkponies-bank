@@ -97,8 +97,9 @@ func loadConfig(environ []string) (config, error) {
 		HTTPReadHeaderTimeout: l.Duration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
 		// Request bodies are a few hundred bytes.
 		HTTPReadTimeout: l.Duration("HTTP_READ_TIMEOUT", 10*time.Second),
-		// The long-poll soft timeout, its two bounded reads and room to write.
-		HTTPWriteTimeout: l.Duration("HTTP_WRITE_TIMEOUT", 25*time.Second),
+		// Twice the long-poll soft timeout: the wait, its two bounded reads
+		// and the write fit with room to spare (see the check below).
+		HTTPWriteTimeout: l.Duration("HTTP_WRITE_TIMEOUT", 30*time.Second),
 		HTTPIdleTimeout:  l.Duration("HTTP_IDLE_TIMEOUT", 60*time.Second),
 		// Time for a load balancer to notice the failing readiness probe.
 		ShutdownDrainDelay: l.Duration("SHUTDOWN_DRAIN_DELAY", 3*time.Second),
@@ -128,11 +129,14 @@ func loadConfig(environ []string) (config, error) {
 		RiskMaxRetryAfter: l.Duration("RISK_MAX_RETRY_AFTER", 30*time.Second),
 
 		WorkerConcurrency: l.Int("WORKER_CONCURRENCY", 4),
-		// Commit hooks wake the local worker; this only bounds the delay for
-		// tasks created by other instances.
-		WorkerIdleInterval: l.Duration("WORKER_IDLE_INTERVAL", time.Second),
-		// Twice the task timeout: a live worker never loses its lease.
-		TaskLease: l.Duration("TASK_LEASE", 30*time.Second),
+		// Commit hooks wake the local worker for new tasks; delayed retries,
+		// review polls and tasks of other instances wait for this poll. As
+		// long as the first retry delay (TASK_RETRY_BASE): a retry runs at
+		// most that much later than its backoff asked.
+		WorkerIdleInterval: l.Duration("WORKER_IDLE_INTERVAL", 500*time.Millisecond),
+		// Three task timeouts: a live worker never loses its lease, and a
+		// crashed worker's task waits less than a minute to run again.
+		TaskLease: l.Duration("TASK_LEASE", 45*time.Second),
 		// One remote call per step plus two short transactions.
 		TaskTimeout: l.Duration("TASK_TIMEOUT", 15*time.Second),
 		// With the backoff below, several minutes of retries ride out a short

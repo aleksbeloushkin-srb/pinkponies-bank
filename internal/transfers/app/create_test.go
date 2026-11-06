@@ -60,7 +60,7 @@ func TestCreateTransferValidates(t *testing.T) {
 		field string
 	}{
 		{"no key", f.request("", 1), "Idempotency-Key"},
-		{"key not ASCII", f.request("ключ", 1), "Idempotency-Key"},
+		{"key not ASCII", f.request("clé-1", 1), "Idempotency-Key"},
 		{"zero amount", f.request("k", 0), "amount_minor"},
 		{"same accounts", CreateTransferRequest{IdempotencyKey: "k", SourceAccountID: f.src, DestinationAccountID: f.src, AmountMinor: 1, Currency: "EUR"}, "destination_account_id"},
 		{"no source", CreateTransferRequest{IdempotencyKey: "k", DestinationAccountID: uuid.New(), AmountMinor: 1, Currency: "EUR"}, "source_account_id"},

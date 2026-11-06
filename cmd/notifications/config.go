@@ -114,13 +114,17 @@ func loadConfig(environ []string) (config, error) {
 		// delivery is marked failed.
 		DeliveryMaxAttempts: l.Int("DELIVERY_MAX_ATTEMPTS", 8),
 
-		WorkerConcurrency:  l.Int("WORKER_CONCURRENCY", 4),
-		WorkerIdleInterval: l.Duration("WORKER_IDLE_INTERVAL", time.Second),
-		TaskLease:          l.Duration("TASK_LEASE", 30*time.Second),
-		TaskTimeout:        l.Duration("TASK_TIMEOUT", 10*time.Second),
-		TaskMaxAttempts:    l.Int("TASK_MAX_ATTEMPTS", 12),
-		TaskRetryBase:      l.Duration("TASK_RETRY_BASE", 500*time.Millisecond),
-		TaskRetryMax:       l.Duration("TASK_RETRY_MAX", 30*time.Second),
+		WorkerConcurrency: l.Int("WORKER_CONCURRENCY", 4),
+		// Commit hooks wake the worker for new deliveries; retries wait for
+		// this poll. As long as the first retry delay (TASK_RETRY_BASE).
+		WorkerIdleInterval: l.Duration("WORKER_IDLE_INTERVAL", 500*time.Millisecond),
+		// Well over TASK_TIMEOUT + 10s, so a live worker never loses its
+		// lease; a crashed worker's delivery waits less than a minute.
+		TaskLease:       l.Duration("TASK_LEASE", 45*time.Second),
+		TaskTimeout:     l.Duration("TASK_TIMEOUT", 10*time.Second),
+		TaskMaxAttempts: l.Int("TASK_MAX_ATTEMPTS", 12),
+		TaskRetryBase:   l.Duration("TASK_RETRY_BASE", 500*time.Millisecond),
+		TaskRetryMax:    l.Duration("TASK_RETRY_MAX", 30*time.Second),
 
 		// Browser origins allowed to read the feed, such as the transfers UI.
 		CORSOrigins: l.List("CORS_ORIGINS", ""),

@@ -118,7 +118,7 @@ services:
       timeout: 3s
       retries: 30
     # Drain pause + HTTP drain + the longest running saga step must fit.
-    stop_grace_period: 40s
+    stop_grace_period: 45s
 
   notifications:
     build: { context: ., target: notifications }

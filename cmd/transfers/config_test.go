@@ -24,7 +24,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if !cfg.Roles.API || !cfg.Roles.Worker || !cfg.Roles.Relay || cfg.KafkaTopic != "transfers.events" {
 		t.Fatalf("roles = %+v", cfg.Roles)
 	}
-	if cfg.HTTPAddr != ":8080" || cfg.AdminAddr != ":9100" || cfg.TaskLease != 30*time.Second || cfg.HoldTTL != 30*time.Minute {
+	if cfg.HTTPAddr != ":8080" || cfg.AdminAddr != ":9100" || cfg.TaskLease != 45*time.Second || cfg.HoldTTL != 30*time.Minute {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 }
@@ -47,7 +47,7 @@ func TestLoadConfigErrors(t *testing.T) {
 		// The hold step's and the capture's retries run on the hold's time
 		// too, not only the review: 20m covers the review with room to spare
 		// and is still too short.
-		{"hold ttl", []string{"TRANSFERS_HOLD_TTL=20m"}, "HOLD_TTL must be at least 22m18s"},
+		{"hold ttl", []string{"TRANSFERS_HOLD_TTL=20m"}, "HOLD_TTL must be at least 22m3s"},
 		{"hold ttl with more retries", []string{"TRANSFERS_TASK_MAX_ATTEMPTS=25"}, "HOLD_TTL must be at least"},
 		{"retry-after cap", []string{"TRANSFERS_RISK_MAX_RETRY_AFTER=5m"}, "RISK_MAX_RETRY_AFTER must be shorter than SCREEN_REVIEW_TIMEOUT"},
 		{"lock vs statement", []string{"TRANSFERS_DB_LOCK_TIMEOUT=10s"}, "DB_LOCK_TIMEOUT must be shorter"},
