@@ -28,6 +28,7 @@ type memStore struct {
 	entries  []ledger.Entry
 	nextID   int64
 	busy     map[uuid.UUID]bool // holds that TryLockHold reports as locked
+	onLock   func()             // runs in LockHold when set: a wait for the row lock
 }
 
 func newMemStore() *memStore {
@@ -170,6 +171,9 @@ func (s *memStore) InsertHold(ctx context.Context, h ledger.Hold) (bool, error) 
 }
 
 func (s *memStore) LockHold(_ context.Context, id uuid.UUID) (ledger.Hold, error) {
+	if s.onLock != nil {
+		s.onLock()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, ok := s.holds[id]

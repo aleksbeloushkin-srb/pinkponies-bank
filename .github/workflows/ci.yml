@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A new push to the same branch or pull request cancels the run it replaces.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     name: unit (Go ${{ matrix.go }})
@@ -24,6 +29,8 @@ jobs:
           go-version: ${{ matrix.go }}
       - name: gofmt
         run: test -z "$(gofmt -s -l .)" || { gofmt -s -l .; exit 1; }
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
       - name: vet
         run: |
           go vet ./...

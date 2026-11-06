@@ -180,6 +180,19 @@ func TestCaptureRefusesExpiredAndReleasedHolds(t *testing.T) {
 	}
 }
 
+// A capture that waits for the hold's row lock past the expiry is refused:
+// the expiry is checked against the time after the wait.
+func TestCaptureChecksExpiryAfterTheLockWait(t *testing.T) {
+	f := newFixture()
+	src, dst := f.open(t, "src", 1000), f.open(t, "dst", 0)
+	hold := f.place(t, "h1", src, dst, 100).Hold
+	f.clock.Advance(15*time.Minute - time.Second)
+	f.store.onLock = func() { f.clock.Advance(2 * time.Second) }
+	if _, err := f.svc.CaptureHold(context.Background(), CaptureHoldRequest{IdempotencyKey: "c1", HoldID: hold.ID}); !errors.Is(err, ledger.ErrHoldExpired) {
+		t.Fatalf("capture after a lock wait past the expiry = %v, want ErrHoldExpired", err)
+	}
+}
+
 func TestReleaseIsIdempotentWhoeverReleasedFirst(t *testing.T) {
 	f := newFixture()
 	src, dst := f.open(t, "src", 1000), f.open(t, "dst", 0)

@@ -213,8 +213,16 @@ func TestSagaCrashPoints(t *testing.T) {
 					f.srcPosted != 10_000-path.captured*path.amount {
 					t.Fatalf("ledger = %+v", f)
 				}
-				if n := count(t, transfersDB, `SELECT count(*) FROM outbox WHERE aggregate_id = $1`, id); n != 3 {
-					t.Fatalf("outbox events = %d, want 3", n)
+				var types string
+				if err := transfersDB.QueryRow(context.Background(),
+					`SELECT string_agg(type, ',' ORDER BY id) FROM outbox WHERE aggregate_id = $1`, id).Scan(&types); err != nil {
+					t.Fatal(err)
+				}
+				if want := "transfer.created,transfer.held,transfer." + string(path.status); types != want {
+					t.Fatalf("outbox events = %s, want %s: one per status", types, want)
+				}
+				if n := count(t, transfersDB, `SELECT count(*) FROM tasks WHERE aggregate_id = $1 AND state <> 'done'`, id); n != 0 {
+					t.Fatalf("%d tasks left behind", n)
 				}
 				checkLedgerBooks(t, 10_000)
 			}

@@ -170,7 +170,6 @@ func (s *Service) CaptureHold(ctx context.Context, req CaptureHoldRequest) (Capt
 	if err != nil {
 		return CaptureResult{}, fmt.Errorf("generate transaction id: %w", err)
 	}
-	now := s.clock.Now()
 
 	var res CaptureResult
 	err = s.tx.Run(ctx, func(ctx context.Context) error {
@@ -178,6 +177,9 @@ func (s *Service) CaptureHold(ctx context.Context, req CaptureHoldRequest) (Capt
 		if err != nil {
 			return err
 		}
+		// Read after the lock: a capture that waited for it must not
+		// succeed on a hold that expired in the meantime.
+		now := s.clock.Now()
 		if txn, ok, err := s.journal.TransactionByKey(ctx, req.IdempotencyKey); err != nil {
 			return fmt.Errorf("find transaction: %w", err)
 		} else if ok {

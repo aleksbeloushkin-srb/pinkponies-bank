@@ -250,8 +250,13 @@ at_least "ledger placed holds over gRPC" \
   "$(metric $admin_ledger 'grpc_server_handled_total{code="OK",method="/ledger.v1.LedgerService/PlaceHold"}')" 5
 at_least "ledger refused the overdraft" \
   "$(metric $admin_ledger 'grpc_server_handled_total{code="FailedPrecondition",method="/ledger.v1.LedgerService/PlaceHold"}')" 1
-expect "ledger books balance in the metrics" \
-  "$(($(metric $admin_ledger 'ledger_balance_sum_minor{currency="EUR",kind="customer"}' | cut -d. -f1) + $(metric $admin_ledger 'ledger_balance_sum_minor{currency="EUR",kind="system"}' | cut -d. -f1)))" 0
+# awk reads the exposition's floats (1.2345e+06) as numbers; both series
+# must be there.
+eur_books() {
+  curl -sS "$admin_ledger/metrics" |
+    awk '$1 ~ /^ledger_balance_sum_minor\{currency="EUR",/ { s += $2; n++ } END { if (n == 2) printf "%d\n", s; else print "missing" }'
+}
+expect "ledger books balance in the metrics" "$(eur_books)" 0
 up_targets=$(curl -sS "$PROM/api/v1/query" --data-urlencode 'query=sum(up)' | jq -r '.data.result[0].value[1] // 0')
 expect "Prometheus scrapes all three services" "$up_targets" 3
 
