@@ -91,6 +91,9 @@ type Channel interface {
 const (
 	OutcomeStored    = "stored"
 	OutcomeDuplicate = "duplicate"
+	// OutcomeIgnored is an event of a type the contract does not list yet:
+	// skipped and committed, not dead-lettered.
+	OutcomeIgnored = "ignored"
 )
 
 // Metrics receives business measurements, after the commit.
@@ -147,6 +150,11 @@ func NewService(d Deps, cfg Config) *Service {
 	s := &Service{tx: d.Tx, store: d.Store, tasks: d.Tasks, channels: map[string]Channel{}, clock: d.Clock,
 		metrics: d.Metrics, newID: d.NewID, log: d.Logger, cfg: cfg}
 	for _, c := range d.Channels {
+		if _, dup := s.channels[c.Name()]; dup {
+			// Two deliveries of one notification on one channel break the
+			// deliveries key: every event would fail.
+			panic("notifications/app: NewService: channel " + c.Name() + " given twice")
+		}
 		s.channels[c.Name()] = c
 		s.names = append(s.names, c.Name())
 	}
@@ -166,11 +174,18 @@ type Message struct {
 }
 
 // HandleEvent turns one consumed message into notifications, exactly once
-// per event id. It returns OutcomeStored or OutcomeDuplicate. A message
-// that can never be processed fails with notifications.ErrInvalidEvent;
-// any other error is transient (the database), and the consumer retries.
+// per event id. It returns OutcomeStored, OutcomeDuplicate or
+// OutcomeIgnored. A message that can never be processed, because it breaks
+// the contract or because the store refuses it, fails with
+// notifications.ErrInvalidEvent; any other error is transient (the
+// database is unreachable), and the consumer retries.
 func (s *Service) HandleEvent(ctx context.Context, m Message) (string, error) {
 	e, err := s.decode(m)
+	if errors.Is(err, eventsv1.ErrUnknownType) {
+		// A tolerant reader: the producer may add a type first.
+		s.log.DebugContext(ctx, "event of an unknown type skipped", "topic", m.Topic, "partition", m.Partition, "offset", m.Offset, "err", err)
+		return OutcomeIgnored, nil
+	}
 	if err != nil {
 		return "", err
 	}

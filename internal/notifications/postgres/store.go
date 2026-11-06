@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/notifications"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/notifications/app"
+	"github.com/aleksbeloushkin-srb/pinkponies-bank/internal/platform/pgdb"
 	"github.com/aleksbeloushkin-srb/pinkponies-bank/pkg/txctx"
 )
 
@@ -39,7 +41,7 @@ func (s *Store) MarkProcessed(ctx context.Context, e app.ProcessedEvent) (bool, 
 		ON CONFLICT (event_id) DO NOTHING`,
 		e.EventID, e.TransferID, e.Type, e.Topic, e.Partition, e.Offset)
 	if err != nil {
-		return false, fmt.Errorf("insert processed event: %w", err)
+		return false, eventError("insert processed event", err)
 	}
 	return tag.RowsAffected() == 1, nil
 }
@@ -51,16 +53,28 @@ func (s *Store) InsertNotification(ctx context.Context, n notifications.Notifica
 		INSERT INTO notifications (id, event_id, account_id, transfer_id, kind, message, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		n.ID, n.EventID, n.AccountID, n.TransferID, string(n.Kind), n.Message, n.CreatedAt); err != nil {
-		return fmt.Errorf("insert notification: %w", err)
+		return eventError("insert notification", err)
 	}
 	for _, ch := range channels {
 		if _, err := db.Exec(ctx, `
 			INSERT INTO deliveries (notification_id, channel, state, updated_at) VALUES ($1, $2, 'pending', $3)`,
 			n.ID, ch, n.CreatedAt); err != nil {
-			return fmt.Errorf("insert delivery: %w", err)
+			return eventError("insert delivery", err)
 		}
 	}
 	return nil
+}
+
+// eventError wraps a failure to store an event. When the database refuses
+// the data itself, the same event is refused on every try: it is marked
+// notifications.ErrEventRefused, poison for the consumer, which retries it
+// a few times and then dead-letters it instead of stopping its partition.
+// Anything else (a lost connection, a timeout) stays transient.
+func eventError(what string, err error) error {
+	if pgdb.IsDataError(err) {
+		return fmt.Errorf("%w: %s: %w", notifications.ErrEventRefused, what, err)
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 const notificationColumns = `id, event_id, account_id, transfer_id, kind, message, created_at`
@@ -104,10 +118,12 @@ func (s *Store) RecordAttempt(ctx context.Context, id uuid.UUID, channel string,
 		outcome, state = "failed", notifications.DeliveryPending
 	}
 	if a.Err != nil {
+		// Cut on a rune boundary: PostgreSQL refuses invalid UTF-8 in text.
 		msg := a.Err.Error()
 		if len(msg) > maxErrorLen {
 			msg = msg[:maxErrorLen]
 		}
+		msg = strings.ToValidUTF8(msg, "")
 		errText = &msg
 	}
 	return s.tx.Run(ctx, func(ctx context.Context) error {

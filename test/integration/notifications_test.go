@@ -234,6 +234,68 @@ func TestConsumerPoisonGoesToTheDLQ(t *testing.T) {
 	}
 }
 
+// An event that keeps the contract but that the database refuses (a NUL
+// byte in the reason, which a PostgreSQL text column cannot hold) is poison
+// too: it is dead-lettered after its retries instead of stopping its
+// partition, and the record behind it on the same partition is handled.
+func TestConsumerStoreRefusalGoesToTheDLQ(t *testing.T) {
+	e := newNotificationsEnv(t)
+	bad := completedEvent()
+	bad.Type, bad.Transfer.Status, bad.Transfer.Reason = eventsv1.TransferRejected, "rejected", "insufficient\x00funds"
+	good := completedEvent()
+	good.Transfer.ID = bad.Transfer.ID // same key: same partition, behind the bad one
+	badRec := eventRecord(t, bad)
+	e.produce(t, badRec, eventRecord(t, good))
+
+	var refused int
+	h := handlerFunc2(func(ctx context.Context, m app.Message) (string, error) {
+		out, err := e.svc.HandleEvent(ctx, m)
+		if errors.Is(err, notifications.ErrEventRefused) {
+			refused++
+		}
+		return out, err
+	})
+	if out := e.consume(t, h, 1); out[0] != app.OutcomeStored {
+		t.Fatalf("outcomes = %v", out)
+	}
+	if refused != 3 {
+		t.Fatalf("refused event tried %d times, want 3", refused)
+	}
+	if dlq := readAll(t, e.dlq, 1); string(dlq[0].Value) != string(badRec.Value) {
+		t.Fatalf("dead letter %s, want the refused event", dlq[0].Value)
+	}
+	if lag := e.lag(t); lag != 0 {
+		t.Fatalf("lag = %d, want 0", lag)
+	}
+}
+
+// The store marks a refusal of the data itself as poison, and a failure
+// that may pass on a retry as transient.
+func TestNotificationsStoreClassifiesRefusals(t *testing.T) {
+	newNotificationsEnv(t)
+	ctx := context.Background()
+	tx := txctx.New(notificationsDB)
+	store := notificationspg.NewStore(tx)
+	ev := completedEvent()
+	processed := app.ProcessedEvent{EventID: ev.ID, TransferID: ev.Transfer.ID, Type: string(ev.Type), Topic: "t"}
+	err := tx.Run(ctx, func(ctx context.Context) error {
+		if _, err := store.MarkProcessed(ctx, processed); err != nil {
+			return err
+		}
+		n := notifications.Notification{ID: uuid.New(), EventID: ev.ID, AccountID: uuid.New(), TransferID: ev.Transfer.ID,
+			Kind: notifications.KindSent, Message: "sent", CreatedAt: time.Now()}
+		return store.InsertNotification(ctx, n, []string{"log", "log"}) // the deliveries key, twice
+	})
+	if !errors.Is(err, notifications.ErrEventRefused) || !errors.Is(err, notifications.ErrInvalidEvent) {
+		t.Fatalf("a constraint violation = %v, want poison", err)
+	}
+	gone, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := store.MarkProcessed(gone, processed); err == nil || errors.Is(err, notifications.ErrInvalidEvent) {
+		t.Fatalf("a cancelled statement = %v, want a transient error", err)
+	}
+}
+
 // collect scrapes the Kafka collector of the service for the env's group,
 // topic and dead-letter topic.
 func (e *notificationsEnv) collect(t *testing.T) (lag, dlqMessages float64) {

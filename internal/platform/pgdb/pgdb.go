@@ -122,6 +122,15 @@ func IsTransient(err error) bool {
 		pgconn.SafeToRetry(err)
 }
 
+// IsDataError reports whether the database refused the data itself: class
+// 22 (data exception, such as a value out of range or invalid text) or
+// class 23 (integrity constraint violation). The same data is refused on
+// every retry.
+func IsDataError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && len(pgErr.Code) == 5 && (pgErr.Code[:2] == "22" || pgErr.Code[:2] == "23")
+}
+
 // IsUniqueViolation reports whether err is a unique constraint violation,
 // optionally of the named constraint.
 func IsUniqueViolation(err error, constraint string) bool {

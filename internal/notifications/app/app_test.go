@@ -202,6 +202,32 @@ func TestFailureLeavesNoTrace(t *testing.T) {
 	}
 }
 
+// A type the contract does not list yet is skipped and committed: a
+// producer may add one before this consumer knows it.
+func TestUnknownTypeIsIgnored(t *testing.T) {
+	store := newMemStore()
+	svc, m := newService(store, &flakyChannel{name: "log"})
+	e, msg := completed()
+	e.Type = "transfer.refunded"
+	msg.Value, _ = json.Marshal(e)
+	if out, err := svc.HandleEvent(context.Background(), msg); err != nil || out != OutcomeIgnored {
+		t.Fatalf("HandleEvent = %q, %v; want ignored", out, err)
+	}
+	if len(store.notes) != 0 || len(store.tasks) != 0 || m.created != 0 {
+		t.Fatalf("an ignored event stored %d notifications and %d tasks", len(store.notes), len(store.tasks))
+	}
+}
+
+// A channel given twice would break the deliveries key on every event.
+func TestNewServiceRefusesARepeatedChannel(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewService accepted the log channel twice")
+		}
+	}()
+	newService(newMemStore(), &flakyChannel{name: "log"}, &flakyChannel{name: "log"})
+}
+
 func TestPoisonIsInvalidEvent(t *testing.T) {
 	svc, _ := newService(newMemStore(), &flakyChannel{name: "log"})
 	e, good := completed()
@@ -212,11 +238,15 @@ func TestPoisonIsInvalidEvent(t *testing.T) {
 	future := e
 	future.SchemaVersion = 2
 	futureBody, _ := json.Marshal(future)
+	toItself := e
+	toItself.Transfer.DestinationAccountID = toItself.Transfer.SourceAccountID
+	toItselfBody, _ := json.Marshal(toItself)
 	for name, m := range map[string]Message{
 		"not JSON":      {Value: []byte("pony")},
 		"wrong key":     wrongKey,
 		"wrong header":  wrongHeader,
 		"future schema": {Value: futureBody},
+		"to itself":     {Value: toItselfBody},
 	} {
 		if _, err := svc.HandleEvent(context.Background(), m); !errors.Is(err, notifications.ErrInvalidEvent) {
 			t.Errorf("%s: err = %v, want ErrInvalidEvent", name, err)

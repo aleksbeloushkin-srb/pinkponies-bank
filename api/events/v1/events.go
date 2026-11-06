@@ -85,6 +85,12 @@ type Transfer struct {
 // ErrInvalid wraps every validation failure of Decode and Validate.
 var ErrInvalid = errors.New("invalid transfer event")
 
+// ErrUnknownType wraps ErrInvalid for an event whose type this version of
+// the contract does not list. A producer may add a type before its
+// consumers know it, so consumers skip such events rather than treat them
+// as poison; a producer never encodes one.
+var ErrUnknownType = fmt.Errorf("%w: unknown type", ErrInvalid)
+
 var currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 
 // Validate checks the fields a consumer relies on.
@@ -93,14 +99,18 @@ func (e TransferEvent) Validate() error {
 	switch {
 	case e.ID == uuid.Nil:
 		return fail("id is missing")
+	case e.Type == "":
+		return fail("type is missing")
 	case !slices.Contains(Types, e.Type):
-		return fail(fmt.Sprintf("unknown type %q", e.Type))
+		return fmt.Errorf("%w %q", ErrUnknownType, e.Type)
 	case e.SchemaVersion != SchemaVersion:
 		return fail(fmt.Sprintf("schema version %d is not %d", e.SchemaVersion, SchemaVersion))
 	case e.OccurredAt.IsZero():
 		return fail("occurred_at is missing")
 	case e.Transfer.ID == uuid.Nil || e.Transfer.SourceAccountID == uuid.Nil || e.Transfer.DestinationAccountID == uuid.Nil:
 		return fail("transfer ids are missing")
+	case e.Transfer.SourceAccountID == e.Transfer.DestinationAccountID:
+		return fail("source and destination are the same account")
 	case e.Transfer.AmountMinor <= 0:
 		return fail("amount must be positive")
 	case !currencyPattern.MatchString(e.Transfer.Currency):

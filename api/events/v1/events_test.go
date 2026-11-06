@@ -69,14 +69,21 @@ func TestDecodeRejectsPoison(t *testing.T) {
 		"not JSON":         []byte("hello, pony"),
 		"no id":            bad(func(e *TransferEvent) { e.ID = uuid.Nil }),
 		"unknown type":     bad(func(e *TransferEvent) { e.Type = "transfer.teleported" }),
+		"no type":          bad(func(e *TransferEvent) { e.Type = "" }),
+		"to itself":        bad(func(e *TransferEvent) { e.Transfer.DestinationAccountID = e.Transfer.SourceAccountID }),
 		"future schema":    bad(func(e *TransferEvent) { e.SchemaVersion = 2 }),
 		"negative amount":  bad(func(e *TransferEvent) { e.Transfer.AmountMinor = -1 }),
 		"lowercase money":  bad(func(e *TransferEvent) { e.Transfer.Currency = "eur" }),
 		"missing version":  bad(func(e *TransferEvent) { e.Transfer.Version = 0 }),
 		"missing occurred": bad(func(e *TransferEvent) { e.OccurredAt = time.Time{} }),
 	} {
-		if _, err := Decode(body); !errors.Is(err, ErrInvalid) {
+		_, err := Decode(body)
+		if !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v, want ErrInvalid", name, err)
+		}
+		// Only a type the contract does not list yet is skippable.
+		if errors.Is(err, ErrUnknownType) != (name == "unknown type") {
+			t.Errorf("%s: err = %v, ErrUnknownType = %v", name, err, errors.Is(err, ErrUnknownType))
 		}
 	}
 }

@@ -11,12 +11,13 @@
 //   - Records of a partition are handled one after another, so the events
 //     of a transfer (one key, one partition) keep their order.
 //   - A poison message (one the handler reports as
-//     notifications.ErrInvalidEvent) is retried MaxAttempts times with
-//     backoff, then written to the dead-letter topic with headers that say
-//     why, and committed. Any other failure (the database is down) is
-//     retried with backoff until it works or the consumer stops; it never
-//     goes to the dead-letter topic, which would empty the topic into it
-//     during an outage.
+//     notifications.ErrInvalidEvent: it breaks the contract, or the store
+//     refuses it) is retried MaxAttempts times with backoff, then written
+//     to the dead-letter topic with headers that say why, and committed.
+//     Any other failure (the database is unreachable) is retried with
+//     backoff until it works or the consumer stops; it never goes to the
+//     dead-letter topic, which would empty the topic into it during an
+//     outage.
 //   - Rebalances wait while a poll is being handled (BlockRebalanceOnPoll),
 //     so a commit never races a partition moving to another member.
 package consumer
@@ -85,7 +86,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		records: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "consumer_records_total",
-			Help: "Records handled, by outcome: stored, duplicate, dead_lettered.",
+			Help: "Records handled, by outcome: stored, duplicate, ignored (an unknown event type), dead_lettered.",
 		}, []string{"outcome"}),
 		retries: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "consumer_retries_total",
@@ -102,7 +103,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}),
 	}
 	reg.MustRegister(m.records, m.retries, m.commitFails, m.duration)
-	for _, o := range []string{app.OutcomeStored, app.OutcomeDuplicate, outcomeDeadLettered} {
+	for _, o := range []string{app.OutcomeStored, app.OutcomeDuplicate, app.OutcomeIgnored, outcomeDeadLettered} {
 		m.records.WithLabelValues(o)
 	}
 	for _, c := range []string{"poison", "transient"} {

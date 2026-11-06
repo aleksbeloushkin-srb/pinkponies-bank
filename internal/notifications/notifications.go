@@ -23,6 +23,11 @@ import (
 // dead-letter topic after its retries.
 var ErrInvalidEvent = errors.New("invalid event")
 
+// ErrEventRefused wraps ErrInvalidEvent for an event the store refuses
+// (a constraint or a value it rejects): the same event is refused on every
+// try, so it is poison too.
+var ErrEventRefused = fmt.Errorf("%w: refused by the store", ErrInvalidEvent)
+
 // ErrNotFound means the notification does not exist.
 var ErrNotFound = errors.New("notification not found")
 
