@@ -130,7 +130,7 @@ What was run for this version, on macOS (arm64) with Docker in a colima VM
 | `-race -cpu=2 -count=200`, unit: every saga crash point (72 cases), consumer and deduplication, task queue, ledger invariants, relay, long polling | pass | pass |
 | `-race -cpu=2 -count=200`, integration: saga crash points against PostgreSQL and the ledger over gRPC (36 cases), the screening hang, 100 concurrent transfers, racing holds, concurrent replays, the task queue | pass (1071 s) | pass (1076 s) |
 | `-race -cpu=2 -count=20`, integration: consumer, poison and refused events to the DLQ, offset not committed, the pipeline, the relay, the notifications store | pass (455 s) | pass (458 s) |
-| every regression test of the independent review, with its fix reverted | | fails (35 of 35 reverts) |
+| every regression test of the independent review, with its fix reverted | | fails (34 of 34 reverts) |
 | promtool: config check, 11 rules, 12 rule test groups | pass | |
 | `scripts/e2e.sh` with `docker compose up --build`, then `down -v` | 73 checks pass | |
 
