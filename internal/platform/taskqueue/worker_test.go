@@ -31,6 +31,7 @@ type fakeStore struct {
 	settled   []settled
 	settleErr error
 	claims    chan int // receives the limit of every Claim when set
+	claimed   chan int // receives the number of tasks every Claim returned, when set
 	onClaim   func()   // runs inside every Claim when set
 }
 
@@ -42,10 +43,13 @@ func (s *fakeStore) Claim(_ context.Context, _ time.Time, limit int, _ time.Dura
 		s.onClaim()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	n := min(limit, len(s.queue))
 	out := s.queue[:n]
 	s.queue = s.queue[n:]
+	s.mu.Unlock()
+	if s.claimed != nil {
+		s.claimed <- n
+	}
 	return out, nil
 }
 
@@ -322,7 +326,7 @@ func TestRunShutdownLetsRunningTaskFinish(t *testing.T) {
 }
 
 func TestRunWakesOnSignal(t *testing.T) {
-	store := &fakeStore{claims: make(chan int, 4)}
+	store := &fakeStore{claimed: make(chan int, 4)}
 	ran := make(chan struct{})
 	wake := make(chan struct{}, 1)
 	w := newWorker(store, handlerFunc(func(context.Context, Task) error {
@@ -335,7 +339,7 @@ func TestRunWakesOnSignal(t *testing.T) {
 	done := make(chan error)
 	go func() { done <- w.Run(ctx) }()
 
-	<-store.claims // the first, empty claim has happened
+	<-store.claimed // the first, empty claim has returned
 	store.mu.Lock()
 	store.queue = append(store.queue, task(1, 0))
 	store.mu.Unlock()
@@ -351,7 +355,7 @@ func TestRunWakesOnSignal(t *testing.T) {
 // idle after a first claim, and woken with work waiting: cancelling before
 // Run reaches a claim would pass even if StopClaiming did nothing.
 func TestRunStopClaiming(t *testing.T) {
-	store := &fakeStore{claims: make(chan int, 16)}
+	store := &fakeStore{claims: make(chan int, 16), claimed: make(chan int, 16)}
 	wake := make(chan struct{}, 1)
 	w := newWorker(store, handlerFunc(func(context.Context, Task) error { return nil }), wake, testCfg)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -359,7 +363,10 @@ func TestRunStopClaiming(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- w.Run(ctx) }()
 
-	<-store.claims // the first, empty claim: Run is now idle in its select
+	// The first claim has returned empty-handed: Run goes idle, and the task
+	// added below can only be claimed by a later claim.
+	<-store.claims
+	<-store.claimed
 	w.StopClaiming()
 	w.StopClaiming() // idempotent
 	store.mu.Lock()
