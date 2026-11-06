@@ -36,7 +36,7 @@ Then open <http://localhost:8080>, send ponies from one account to
 another, and watch the saga: the hold, the screening, the capture or the
 release, and the notifications that follow.
 
-<p align="center"><img src="docs/screenshot.png" alt="The web UI: accounts, the transfer form, two transfers with their saga steps, and the notifications feed" width="640"></p>
+<p align="center"><img src="docs/screenshot.png" alt="The web UI: accounts, the transfer form, three transfers with their saga steps, and the notifications feed" width="640"></p>
 
 Or with curl:
 
