@@ -347,20 +347,33 @@ func TestRunWakesOnSignal(t *testing.T) {
 }
 
 // After StopClaiming the worker takes nothing new, even when woken, and Run
-// returns once its context is cancelled.
+// returns once its context is cancelled. The worker is stopped while it is
+// idle after a first claim, and woken with work waiting: cancelling before
+// Run reaches a claim would pass even if StopClaiming did nothing.
 func TestRunStopClaiming(t *testing.T) {
-	store := &fakeStore{queue: []Task{task(1, 0)}}
+	store := &fakeStore{claims: make(chan int, 16)}
 	wake := make(chan struct{}, 1)
 	w := newWorker(store, handlerFunc(func(context.Context, Task) error { return nil }), wake, testCfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	<-store.claims // the first, empty claim: Run is now idle in its select
 	w.StopClaiming()
 	w.StopClaiming() // idempotent
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error)
-	go func() { done <- w.Run(ctx) }()
-	wake <- struct{}{}
+	store.mu.Lock()
+	store.queue = append(store.queue, task(1, 0))
+	store.mu.Unlock()
+	// Three sends through a one-slot channel: the third completes only after
+	// Run has received the second, so it has fully handled the first wake.
+	for range 3 {
+		wake <- struct{}{}
+	}
+	if n := len(store.claims); n != 0 {
+		t.Fatalf("Run claimed %d more times after StopClaiming", n)
+	}
 	cancel()
-
 	if err := <-done; err != nil {
 		t.Fatalf("Run = %v", err)
 	}
