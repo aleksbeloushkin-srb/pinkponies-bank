@@ -87,15 +87,18 @@ answers a repeat with the same screening.
 
 | Step | What is retried | Bound | After the bound |
 | --- | --- | --- | --- |
-| hold | `Unavailable`, `DeadlineExceeded`, `Aborted`, `Internal`... | the task's `TRANSFERS_TASK_MAX_ATTEMPTS` (15) with backoff | the task goes dead (`DeadTasks` alert); the transfer stays `pending`; if the hold was placed, it expires after `TRANSFERS_HOLD_TTL` |
-| screen | every failed call: timeout, 5xx, lost connection, 429, 4xx | `TRANSFERS_SCREEN_MAX_FAILURES` (6) failed calls | compensation: release, `canceled` / `screening_unavailable` |
-| screen (review) | a `review` answer is not a failure: the same task is postponed by the provider's `Retry-After`, clamped to 1 to 30 s | `TRANSFERS_SCREEN_REVIEW_TIMEOUT` (5 min) since the step started | compensation: release, `canceled` / `screening_review_timeout` |
+| hold | `Unavailable`, `DeadlineExceeded`, `Aborted`, `Internal`..., and a run whose process died | the task's `TRANSFERS_TASK_MAX_ATTEMPTS` (15) with backoff | the task goes dead (`DeadTasks` alert); the transfer stays `pending`; if the hold was placed, it expires after `TRANSFERS_HOLD_TTL` |
+| screen | every failed call: timeout, 5xx, lost connection, 429, 4xx. A 429 waits for its `Retry-After`, cut to `TRANSFERS_RISK_MAX_RETRY_AFTER` (30 s) and to the time the step has left | `TRANSFERS_SCREEN_MAX_FAILURES` (6) failed calls | compensation: release, `canceled` / `screening_unavailable` |
+| screen (review) | a `review` answer is not a failure: the same task is postponed by the provider's `Retry-After`, clamped to 1 to 30 s and to the time the step has left | `TRANSFERS_SCREEN_REVIEW_TIMEOUT` (5 min) since the step's first run, whatever the answers were | compensation: release, `canceled` / `screening_review_timeout` if the provider answered review, `screening_unavailable` if it never did |
 | capture | as hold | as hold | the task goes dead; the transfer stays `held`; an operator must finish it, because the money may have moved |
 | release | as hold | as hold | the task goes dead; the hold expires after its TTL anyway |
 
 The screening bound is checked before the call, from the task's failed
 attempts, which the queue counts: polls of a review are postponements and
-do not count. `TRANSFERS_TASK_MAX_ATTEMPTS` must exceed
+do not count. The queue counts an attempt when it claims the task, so a
+run that kills its process (out of memory, a fatal runtime error) counts
+as failed too, and a handler that crashes every time reaches the dead state
+after `TRANSFERS_TASK_MAX_ATTEMPTS` leases instead of looping. `TRANSFERS_TASK_MAX_ATTEMPTS` must exceed
 `TRANSFERS_SCREEN_MAX_FAILURES`; the configuration refuses to start
 otherwise, or a failing screening would go dead instead of releasing its
 hold.
@@ -131,9 +134,14 @@ notifications service tells the client about.
 The ledger's expiry sweep
 ([`internal/ledger/app/expiry.go`](../internal/ledger/app/expiry.go)) is
 the safety net under all of this: a hold whose saga never comes back is
-released after its TTL. `TRANSFERS_HOLD_TTL` (15 min) must exceed
-`TRANSFERS_SCREEN_REVIEW_TIMEOUT` by a minute, or approved transfers would
-find their hold expired, and it must not exceed the ledger's
+released after its TTL. The TTL starts when the ledger places the hold, so
+`TRANSFERS_HOLD_TTL` (30 min) must cover every step that runs on it: the
+hold step's retries after a lost answer, the screen step (bounded by
+`TRANSFERS_SCREEN_REVIEW_TIMEOUT` from its first run) and the capture's
+retries, each retry taking its whole `TRANSFERS_TASK_TIMEOUT` and the
+longest backoff. The configuration adds that up and refuses a shorter TTL
+(22 min with the defaults), or an approved transfer could find its hold
+expired. It must not exceed the ledger's
 `LEDGER_HOLD_MAX_TTL` (24 h): the ledger refuses a longer TTL as an invalid
 argument, and that check spans two services, so no configuration can
 enforce it (see [REVIEW.md](REVIEW.md)).
@@ -177,9 +185,16 @@ Each row is a test:
 | 14 and 15 together, end to end | `TestPipelineTransferToNotificationsDeliveredOnce`, and the end-to-end script |
 | 16 | `TestDeliveryIsDoneOnce` in [`internal/notifications/app/app_test.go`](../internal/notifications/app/app_test.go); the sink counts duplicates in the end-to-end script |
 
-After every case the tests check the same things: the final status, one
+After every case both suites check the same things: the final status, one
 hold, exactly one capture or one release (never both), the source debited
-at most once, one event per status, and no task left behind.
+at most once, one event per status in order, and no task left unfinished.
+
+A crash in these tests is a panic the worker recovers, which settles the
+task as a failed attempt. A process that dies in the handler settles
+nothing; `TestQueueCrashLoopGoesDead` in
+[`test/integration/queue_test.go`](../test/integration/queue_test.go)
+covers that case: the claim has counted the attempt, and after
+`MaxAttempts` such runs the next claim buries the task without running it.
 
 ## Ambiguous screening answers
 
@@ -191,7 +206,7 @@ key, later.
 
 | Answer | Executed? | Class |
 | --- | --- | --- |
-| 429 with `Retry-After` | no | `rate_limited`; the task waits at least `Retry-After` |
+| 429 with `Retry-After` | no | `rate_limited`; the task waits at least `Retry-After`, which the client cuts to `TRANSFERS_RISK_MAX_RETRY_AFTER` and the saga to the step's remaining time |
 | connection refused before anything was written | no | `unavailable` |
 | timeout, reset, 5xx, 408, 409, 425, an unreadable 2xx | maybe | `ambiguous` |
 | another 4xx | our request or credentials are wrong | `misconfigured` |

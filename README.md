@@ -249,15 +249,18 @@ worth knowing:
 | `TRANSFERS_ROLES` | `api,worker,relay` | parts of the binary to run |
 | `TRANSFERS_LEDGER_ADDR` / `_TIMEOUT` | required / `3s` | gRPC target, per-call deadline |
 | `TRANSFERS_RISK_URL` / `_TIMEOUT` | required for the worker / `2s` | screening provider, per-call deadline |
-| `TRANSFERS_TASK_LEASE` / `_TIMEOUT` / `_MAX_ATTEMPTS` | `30s` / `15s` / `15` | the task queue; checked: call + 5 s ≤ timeout, timeout + 10 s ≤ lease |
-| `TRANSFERS_HOLD_TTL` | `15m` | hold TTL asked of the ledger; must exceed the review timeout by 1 min |
+| `TRANSFERS_RISK_MAX_RETRY_AFTER` | `30s` | the longest wait a 429 may ask for; checked: shorter than the review timeout |
+| `TRANSFERS_TASK_LEASE` / `_TIMEOUT` / `_MAX_ATTEMPTS` | `45s` / `15s` / `15` | the task queue; checked: call + 5 s ≤ timeout, timeout + 10 s ≤ lease |
+| `TRANSFERS_WORKER_IDLE_INTERVAL` | `500ms` | how soon delayed retries and other instances' tasks are found; as long as the first retry delay |
+| `TRANSFERS_HOLD_TTL` | `30m` | hold TTL asked of the ledger; checked: covers the worst case of the hold, screen and capture steps (22 min with the defaults) |
 | `TRANSFERS_SCREEN_MAX_FAILURES` / `_REVIEW_TIMEOUT` | `6` / `5m` | bounds of screening before compensation |
 | `TRANSFERS_KAFKA_BROKERS` / `_TOPIC` | required for the relay / `transfers.events` | the outbox's destination |
 | `TRANSFERS_WAIT_TIMEOUT` / `_MAX_WAITERS` | `15s` / `2000` | long polling |
+| `TRANSFERS_HTTP_WRITE_TIMEOUT` | `30s` | twice the long-poll timeout; checked: covers the wait, its two reads and 5 s to write |
 | `TRANSFERS_UI_NOTIFICATIONS_URL` | empty | the notifications API as the browser reaches it |
 | `NOTIFICATIONS_KAFKA_BROKERS` / `_TOPIC` / `_DLQ_TOPIC` / `_GROUP` | required / `transfers.events` / `transfers.events.dlq` / `notifications` | what to consume, where poison goes |
 | `NOTIFICATIONS_CONSUMER_MAX_ATTEMPTS` | `5` | tries of a poison message before the DLQ |
-| `NOTIFICATIONS_CHANNELS` / `_WEBHOOK_URL` | `log,webhook` / required for webhook | delivery channels |
+| `NOTIFICATIONS_CHANNELS` / `_WEBHOOK_URL` | `log,webhook` / required for webhook | delivery channels, each at most once |
 | `NOTIFICATIONS_CORS_ORIGINS` | empty | browser origins allowed to read the feed |
 | `NOTIFICATIONS_SINK_ENABLED` | `false` | the fake webhook receiver, for development |
 | `FAKERISK_REVIEW_DELAY` / `_FAULTS` / `_LATENCY` | `3s` / empty / `0s` | the fake provider's behaviour |

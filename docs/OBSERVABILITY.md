@@ -63,7 +63,7 @@ make check-alerts                 # promtool: config check and alert rule tests
 | `screening_request_duration_seconds` | histogram | none | duration of one screening call |
 | `grpc_client_handled_total` | counter | `method`, `code` | RPCs to the ledger as this side saw them, including deadlines that expired on the way |
 | `grpc_client_handling_seconds` | histogram | `method` | duration of RPCs to the ledger |
-| `tasks_claimed_total`, `task_attempts_total` | counter | `kind` (+ `outcome`) | saga steps claimed; settled runs by outcome `ok`, `retry`, `permanent`, `dead` |
+| `tasks_claimed_total`, `task_attempts_total` | counter | `kind` (+ `outcome`) | saga steps claimed; settled runs by outcome `ok`, `retry`, `permanent`, `dead` (out of attempts, also a task whose last run never settled because its process died) |
 | `task_lag_seconds`, `task_duration_seconds` | histogram | `kind` | due-to-claim delay; handler run time including the remote call |
 | `lease_lost_total`, `task_panics_total` | counter | none | results discarded after a lease takeover; recovered handler panics |
 | `tasks_ready`, `tasks_dead` | gauge | `kind` | tasks in the ready and dead states |
@@ -85,7 +85,8 @@ make check-alerts                 # promtool: config check and alert rule tests
 | `ledger_holds_placed_total`, `ledger_holds_captured_total` | counter | none | holds placed and captured, replays excluded |
 | `ledger_holds_released_total` | counter | `cause` | `requested` (compensation) or `expired` (the sweep) |
 | `ledger_holds_active` | gauge | none | holds in the active state |
-| `ledger_hold_oldest_active_seconds` | gauge | none | age of the oldest active hold |
+| `ledger_hold_oldest_active_seconds` | gauge | none | age of the oldest active hold; for dashboards, since a healthy age depends on the TTL a caller asks for |
+| `ledger_hold_oldest_expired_seconds` | gauge | none | how long the most overdue active hold is past its expiry; 0 when the sweep keeps up |
 | `ledger_balance_sum_minor` | gauge | `currency`, `kind` | sum of posted balances; per currency, customer plus system must be 0 |
 | `db_pool_*`, `metrics_collect_errors_total` | | | as above |
 
@@ -93,8 +94,8 @@ make check-alerts                 # promtool: config check and alert rule tests
 
 | Name | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `consumer_records_total` | counter | `outcome` | records handled: `stored`, `duplicate`, `dead_lettered` |
-| `consumer_retries_total` | counter | `class` | failed tries to be retried: `poison` (bounded, then the DLQ) or `transient` (until it works) |
+| `consumer_records_total` | counter | `outcome` | records handled: `stored`, `duplicate`, `ignored` (an event type the contract does not list yet), `dead_lettered` |
+| `consumer_retries_total` | counter | `class` | failed tries to be retried: `poison` (the event breaks the contract or the store refuses its data; bounded, then the DLQ) or `transient` (the database is unreachable; until it works) |
 | `consumer_commit_errors_total` | counter | none | failed offset commits; the records come back and are deduplicated |
 | `consumer_handle_duration_seconds` | histogram | none | one successful handling |
 | `kafka_consumer_group_lag` | gauge | `group`, `topic` | records not committed by the group, from committed and end offsets (see below) |
@@ -125,7 +126,7 @@ promtool test runs every rule with two instances where it matters.
 | `OutboxLag` | `max(outbox_oldest_unpublished_seconds) > 60` | 5m | page | the relay and `outbox_failed_total`; Kafka reachability. Events are kept |
 | `ScreeningAmbiguousRatio` | `sum(rate(screening_requests_total{outcome="ambiguous"}[10m])) / sum(rate(screening_requests_total[10m])) > 0.05` | 10m | page | the provider's latency and errors; past the bound transfers are canceled |
 | `ScreeningMisconfigured` | `sum(increase(screening_requests_total{outcome="misconfigured"}[5m])) > 0` | | page | `TRANSFERS_RISK_URL` and credentials |
-| `HoldLeak` | `max(ledger_hold_oldest_active_seconds) > 900` | 5m | page | the transfer behind the hold (its key is `transfer:<id>:hold`); the sweep releases it at its TTL |
+| `HoldLeak` | `max(ledger_hold_oldest_expired_seconds) > 60` | 2m | page | the ledger's expiry sweep: its logs and database errors. A hold past its own TTL should be gone within a sweep interval (5 s); a stuck transfer within its TTL is `SagaStuck`'s case |
 | `LedgerOutOfBalance` | `sum by (currency) (max by (currency, kind) (ledger_balance_sum_minor)) != 0` | 1m | page | stop writes; compare `posted_minor` with the sum of entries per account |
 | `DLQNotEmpty` | `max(kafka_topic_messages{topic="transfers.events.dlq"}) > 0` | 1m | ticket | the dead letters and their `dlq-error` headers; fix, replay what is valid |
 | `ConsumerLag` | `max by (group, topic) (kafka_consumer_group_lag) > 100` | 5m | page | the notifications service and `consumer_retries_total{class="transient"}` |

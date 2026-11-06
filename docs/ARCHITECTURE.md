@@ -77,7 +77,7 @@ three contracts, all in this repository:
 | Contract | Between | Format | Compatibility |
 | --- | --- | --- | --- |
 | `ledger.v1.LedgerService` | transfers to ledger | protobuf over gRPC; generated Go in `gen/ledger/v1`, committed and checked against a fresh `make proto` in CI | add fields and methods; never reuse field numbers; `buf breaking` is the tool (not wired yet, see IMPROVEMENTS.md) |
-| `transfers.events` | transfers to notifications (and any future consumer) | JSON body (`eventsv1.TransferEvent`), key = transfer id, headers `event-id`, `event-type`, `content-type` | fields may be added; consumers ignore unknown fields; a breaking change is a new `schema_version` and a new package |
+| `transfers.events` | transfers to notifications (and any future consumer) | JSON body (`eventsv1.TransferEvent`), key = transfer id, headers `event-id`, `event-type`, `content-type` | fields and event types may be added: consumers ignore unknown fields and skip an unknown type (counted as `ignored`, not dead-lettered); changing what an existing field or type means is a breaking change: a new `schema_version` and a new package |
 | screening | transfers to the provider | JSON over HTTP, `Idempotency-Key` | owned by the provider; the client classifies every answer |
 
 ### The ledger's error model

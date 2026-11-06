@@ -53,8 +53,11 @@ A real provider is a second adapter next to
    maybe executed (timeouts, resets, 5xx, unreadable answers),
    misconfigured (our credentials or request). All of them wrap
    `ErrScreeningUnavailable`; the class is for the metrics.
-4. **Respect `Retry-After`:** return an `*app.RetryAfterError`, and the task
-   queue waits at least that long.
+4. **Respect `Retry-After`, within bounds:** return an
+   `*app.RetryAfterError`, and the task queue waits at least that long.
+   Cut the hint to a configured maximum first, as the screening client
+   does with `RISK_MAX_RETRY_AFTER`: it comes from outside, and the step
+   holds money while it waits.
 5. **Keep the per-call deadline** shorter than the task timeout; the
    configuration checks `RISK_TIMEOUT + 5s <= TASK_TIMEOUT`.
 
@@ -65,7 +68,9 @@ without any change to the transfers service.
 
 1. **Depend on the contract only:**
    [`api/events/v1`](../api/events/v1/events.go). Decode with
-   `eventsv1.Decode`, which ignores unknown fields.
+   `eventsv1.Decode`, which ignores unknown fields, and skip an event
+   whose error is `eventsv1.ErrUnknownType`: the producer may add a type
+   before you know it.
 2. **Use your own consumer group**, so your offsets are yours; a new group
    starts from the beginning of the topic.
 3. **Deduplicate by event id** in the same transaction as your effect, as
@@ -77,7 +82,9 @@ without any change to the transfers service.
    ignore an event whose version is not above the one you stored.
 5. **Have a dead-letter topic** and an alert on it; reuse
    [`internal/notifications/consumer`](../internal/notifications/consumer/consumer.go)
-   if your handler fits its interface.
+   if your handler fits its interface. Report as poison everything a retry
+   cannot fix, including data your database refuses, or one such event
+   stops its partition.
 
 ## A new notification channel
 
@@ -129,7 +136,7 @@ so the same image runs as API, worker or relay deployments.
 
 - **gRPC:** add fields and methods; for a breaking change, a `ledger.v2`
   package served next to `v1` until every client moved.
-- **Events:** add fields freely. A breaking change is `schema_version: 2`,
+- **Events:** add fields and event types freely. A breaking change is `schema_version: 2`,
   published to a new topic or alongside v1 until every consumer moved;
   consumers reject versions they do not know (they go to the DLQ, which
   alerts).

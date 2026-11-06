@@ -69,9 +69,11 @@ prefix wrong publishes out of order.
 ## 4. Partition-parallel consumer
 
 The consumer handles the records of one poll partition after partition.
-A transient failure on one partition (the database rejects one insert)
-stops the others too, and because rebalances wait while a poll is handled,
-a long outage also blocks a rebalance until the member is kicked out.
+A transient failure on one partition (a slow or briefly unreachable
+database) stops the others too, and because rebalances wait while a poll
+is handled, a long outage also blocks a rebalance until the member is
+kicked out. An event the database refuses is not such a failure: it is
+poison and goes to the dead-letter topic after its retries.
 
 The common structure is a goroutine per assigned partition, fed by the
 poll loop, with `OnPartitionsAssigned` and `OnPartitionsRevoked` starting
