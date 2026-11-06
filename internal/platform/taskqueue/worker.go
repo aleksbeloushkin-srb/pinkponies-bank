@@ -13,6 +13,9 @@ import (
 // settleTimeout bounds the statement that records a task's outcome.
 const settleTimeout = 5 * time.Second
 
+// errNeverSettled buries a task whose last run never recorded an outcome.
+var errNeverSettled = errors.New("out of attempts: the last run never settled, its process may have crashed in the handler")
+
 // Claimer leases due tasks.
 type Claimer interface {
 	Claim(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]Task, error)
@@ -56,6 +59,7 @@ type Config struct {
 	// a live worker settles its task before the lease can pass to another.
 	TaskTimeout time.Duration
 	// MaxAttempts is the number of failed runs after which a task is dead.
+	// A run whose process died before it settled counts as failed.
 	MaxAttempts int
 	Backoff     Backoff
 }
@@ -128,6 +132,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				now := w.clock.Now()
 				tasks, err := w.store.Claim(ctx, now, free, w.cfg.Lease)
 				if ctx.Err() != nil {
+					w.giveBack(ctx, tasks)
 					return nil
 				}
 				if err != nil {
@@ -187,6 +192,22 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	return len(tasks), nil
 }
 
+// giveBack returns tasks claimed but never started, so they do not wait out
+// their lease and do not spend an attempt.
+func (w *Worker) giveBack(ctx context.Context, tasks []Task) {
+	if len(tasks) == 0 {
+		return
+	}
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
+	defer cancel()
+	for _, t := range tasks {
+		if err := w.store.Postpone(sctx, t, t.RunAfter); err != nil {
+			w.log.WarnContext(ctx, "give back an unstarted task failed; it runs when the lease expires",
+				"task_id", t.ID, "kind", t.Kind, "err", err)
+		}
+	}
+}
+
 func (w *Worker) observeClaim(t Task, now time.Time) {
 	w.metrics.claimed.WithLabelValues(t.Kind).Inc()
 	w.metrics.lag.WithLabelValues(t.Kind).Observe(max(now.Sub(t.RunAfter), 0).Seconds())
@@ -194,11 +215,19 @@ func (w *Worker) observeClaim(t Task, now time.Time) {
 
 // process runs one task and records the outcome.
 //
+// A task claimed with its attempts already spent had its last run end
+// without a settle: the process died in the handler. It is buried without
+// running, or a handler that crashes its process would loop forever.
+//
 // The handler gets a context detached from the worker's cancellation and
 // bounded by TaskTimeout. On shutdown we stop claiming but let a running
 // task finish: cancelling it in the middle of a remote call would turn a
 // clean result into an ambiguous one.
 func (w *Worker) process(ctx context.Context, t Task) {
+	if t.Attempts >= w.cfg.MaxAttempts {
+		w.settle(ctx, t, errNeverSettled)
+		return
+	}
 	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.cfg.TaskTimeout)
 	defer cancel()
 	start := time.Now()

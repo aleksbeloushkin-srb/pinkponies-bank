@@ -189,8 +189,12 @@ func (s *memStore) Claim(_ context.Context, now time.Time, limit int, lease time
 			break
 		}
 		if t.state == "ready" && !t.task.RunAfter.After(now) && !t.task.LeaseUntil.After(now) {
+			// As in the tasks table: the claim counts the attempt, and the
+			// claimed task reports the attempts before this run.
 			t.task.LeaseUntil = now.Add(lease)
-			out = append(out, t.task)
+			claimed := t.task
+			t.task.Attempts++
+			out = append(out, claimed)
 		}
 	}
 	return out, nil
@@ -217,15 +221,15 @@ func (s *memStore) Complete(_ context.Context, t taskqueue.Task) error {
 }
 
 func (s *memStore) Retry(_ context.Context, t taskqueue.Task, runAfter time.Time, _ string) error {
-	return s.settle(t, func(mt *memTask) { mt.task.Attempts++; mt.task.RunAfter = runAfter })
-}
-
-func (s *memStore) Postpone(_ context.Context, t taskqueue.Task, runAfter time.Time) error {
 	return s.settle(t, func(mt *memTask) { mt.task.RunAfter = runAfter })
 }
 
+func (s *memStore) Postpone(_ context.Context, t taskqueue.Task, runAfter time.Time) error {
+	return s.settle(t, func(mt *memTask) { mt.task.Attempts--; mt.task.RunAfter = runAfter })
+}
+
 func (s *memStore) Bury(_ context.Context, t taskqueue.Task, _ string) error {
-	return s.settle(t, func(mt *memTask) { mt.task.Attempts++; mt.state = "dead" })
+	return s.settle(t, func(mt *memTask) { mt.state = "dead" })
 }
 
 // nextDue returns the earliest run_after of a ready task.

@@ -177,6 +177,42 @@ func TestQueueDeadAndPostponed(t *testing.T) {
 	}
 }
 
+// A handler that kills its process never settles its task. The claim counts
+// the attempt anyway, so after MaxAttempts such runs the next claim buries
+// the task without running it, instead of crashing the process forever.
+func TestQueueCrashLoopGoesDead(t *testing.T) {
+	q, c := newQueue(t)
+	enqueue(t, q, c, 1)
+	cfg := queueConfig()
+	for i := range cfg.MaxAttempts {
+		tasks, err := q.Claim(context.Background(), c.Now(), 1, cfg.Lease)
+		if err != nil || len(tasks) != 1 || tasks[0].Attempts != i {
+			t.Fatalf("claim %d = %+v, %v", i+1, tasks, err)
+		}
+		// The process dies here: nothing is settled.
+		c.Advance(cfg.Lease + time.Second)
+	}
+	var runs atomic.Int32
+	w := newQueueWorker(q, handlerFunc(func(context.Context, taskqueue.Task) error {
+		runs.Add(1)
+		return nil
+	}), c)
+	if n, err := w.RunOnce(context.Background()); err != nil || n != 1 {
+		t.Fatalf("RunOnce = %d, %v", n, err)
+	}
+	var (
+		state    string
+		attempts int
+	)
+	if err := transfersDB.QueryRow(context.Background(), `SELECT state, attempts FROM tasks`).Scan(&state, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if state != "dead" || runs.Load() != 0 {
+		t.Fatalf("after %d runs that never settled: state=%s attempts=%d runs=%d, want dead without running",
+			cfg.MaxAttempts, state, attempts, runs.Load())
+	}
+}
+
 // Enqueueing is idempotent by (kind, aggregate, dedup key), and a task
 // enqueued in a rolled-back transaction does not exist.
 func TestQueueEnqueueIsTransactional(t *testing.T) {

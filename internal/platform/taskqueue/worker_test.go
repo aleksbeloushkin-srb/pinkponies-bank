@@ -31,11 +31,15 @@ type fakeStore struct {
 	settled   []settled
 	settleErr error
 	claims    chan int // receives the limit of every Claim when set
+	onClaim   func()   // runs inside every Claim when set
 }
 
 func (s *fakeStore) Claim(_ context.Context, _ time.Time, limit int, _ time.Duration) ([]Task, error) {
 	if s.claims != nil {
 		s.claims <- limit
+	}
+	if s.onClaim != nil {
+		s.onClaim()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -362,6 +366,45 @@ func TestRunStopClaiming(t *testing.T) {
 	}
 	if store.settledCount() != 0 {
 		t.Fatalf("settled %d tasks after StopClaiming, want none", store.settledCount())
+	}
+}
+
+// A task claimed with its attempts spent had a run that never settled (its
+// process died in the handler): it is buried without running again.
+func TestWorkerBuriesATaskWhoseLastRunNeverSettled(t *testing.T) {
+	store := &fakeStore{queue: []Task{task(1, testCfg.MaxAttempts)}}
+	ran := false
+	w := newWorker(store, handlerFunc(func(context.Context, Task) error { ran = true; return nil }), nil, testCfg)
+	if n, err := w.RunOnce(context.Background()); err != nil || n != 1 {
+		t.Fatalf("RunOnce = %d, %v", n, err)
+	}
+	if ran || len(store.settled) != 1 || store.settled[0].how != "dead" || store.settled[0].cause != errNeverSettled.Error() {
+		t.Fatalf("ran=%v settled=%+v, want dead without running", ran, store.settled)
+	}
+	if got := testutil.ToFloat64(w.metrics.attempts.WithLabelValues(kindTest, outcomeDead)); got != 1 {
+		t.Fatalf("dead outcomes = %v, want 1", got)
+	}
+}
+
+// Tasks claimed as Run is cancelled are given back at once, with their
+// attempt, instead of waiting out their lease without running.
+func TestRunGivesBackTasksClaimedAtCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	due := t0.Add(-time.Minute)
+	store := &fakeStore{queue: []Task{{ID: 1, Kind: kindTest, RunAfter: due}, {ID: 2, Kind: kindTest, RunAfter: due}}, onClaim: cancel}
+	ran := false
+	w := newWorker(store, handlerFunc(func(context.Context, Task) error { ran = true; return nil }), nil, testCfg)
+	if err := w.Run(ctx); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if ran || len(store.settled) != 2 {
+		t.Fatalf("ran=%v settled=%+v, want both given back", ran, store.settled)
+	}
+	for _, s := range store.settled {
+		if s.how != "postponed" || !s.runAfter.Equal(due) {
+			t.Fatalf("settled %+v, want postponed to its own run_after", s)
+		}
 	}
 }
 

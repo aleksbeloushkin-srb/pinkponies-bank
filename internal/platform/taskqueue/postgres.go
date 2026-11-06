@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -74,6 +75,10 @@ func (q *Postgres) Enqueue(ctx context.Context, s Spec) (bool, error) {
 // previous lease, if any, has expired. Concurrent claimers skip each other's
 // locked rows instead of waiting, so N workers never receive the same task.
 //
+// Claiming counts an attempt: a run that never settles, because its process
+// died, has spent it. Postpone gives it back, and Task.Attempts excludes the
+// run being claimed.
+//
 // now comes from the caller's clock rather than the database's now(): it
 // makes lease expiry testable without sleeping. The price is that instance
 // clocks must agree to well within a lease, which NTP gives in practice.
@@ -89,10 +94,10 @@ func (q *Postgres) Claim(ctx context.Context, now time.Time, limit int, lease ti
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE tasks t
-		SET lease_until = $2, updated_at = now()
+		SET attempts = t.attempts + 1, lease_until = $2, updated_at = now()
 		FROM batch
 		WHERE t.id = batch.id
-		RETURNING t.id, t.kind, t.aggregate_id, t.dedup_key, t.payload, t.attempts, t.run_after, t.lease_until`,
+		RETURNING t.id, t.kind, t.aggregate_id, t.dedup_key, t.payload, t.attempts - 1, t.run_after, t.lease_until`,
 		now, now.Add(lease), limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim tasks: %w", err)
@@ -120,19 +125,21 @@ func (q *Postgres) Complete(ctx context.Context, t Task) error {
 		WHERE id = $1 AND lease_until = $2 AND state = 'ready'`)
 }
 
-// Retry records a failed attempt and schedules the next one at runAfter.
+// Retry records a failed attempt (counted by the claim) and schedules the
+// next one at runAfter.
 func (q *Postgres) Retry(ctx context.Context, t Task, runAfter time.Time, cause string) error {
 	return q.settle(ctx, t, `
 		UPDATE tasks
-		SET attempts = attempts + 1, run_after = $3, last_error = $4, lease_until = NULL, updated_at = now()
+		SET run_after = $3, last_error = $4, lease_until = NULL, updated_at = now()
 		WHERE id = $1 AND lease_until = $2 AND state = 'ready'`,
 		runAfter, truncate(cause))
 }
 
-// Postpone reschedules the task at runAfter without counting an attempt.
+// Postpone reschedules the task at runAfter and gives back the attempt the
+// claim counted.
 func (q *Postgres) Postpone(ctx context.Context, t Task, runAfter time.Time) error {
 	return q.settle(ctx, t, `
-		UPDATE tasks SET run_after = $3, lease_until = NULL, updated_at = now()
+		UPDATE tasks SET attempts = greatest(attempts - 1, 0), run_after = $3, lease_until = NULL, updated_at = now()
 		WHERE id = $1 AND lease_until = $2 AND state = 'ready'`,
 		runAfter)
 }
@@ -142,7 +149,7 @@ func (q *Postgres) Postpone(ctx context.Context, t Task, runAfter time.Time) err
 func (q *Postgres) Bury(ctx context.Context, t Task, cause string) error {
 	return q.settle(ctx, t, `
 		UPDATE tasks
-		SET state = 'dead', attempts = attempts + 1, last_error = $3, lease_until = NULL, updated_at = now()
+		SET state = 'dead', last_error = $3, lease_until = NULL, updated_at = now()
 		WHERE id = $1 AND lease_until = $2 AND state = 'ready'`,
 		truncate(cause))
 }
@@ -162,9 +169,12 @@ func leaseHeld(tag pgconn.CommandTag) error {
 	return nil
 }
 
+// truncate cuts s to at most maxErrorLen bytes of valid UTF-8. A byte cut
+// can split a rune, and PostgreSQL refuses invalid UTF-8 in a text column:
+// the settle would fail and the task would run again.
 func truncate(s string) string {
-	if len(s) <= maxErrorLen {
-		return s
+	if len(s) > maxErrorLen {
+		s = s[:maxErrorLen]
 	}
-	return s[:maxErrorLen]
+	return strings.ToValidUTF8(s, "")
 }

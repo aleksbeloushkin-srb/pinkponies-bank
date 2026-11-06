@@ -17,9 +17,12 @@
 //	Permanent(err)      retrying cannot help: the task goes dead at once
 //	any other error     a failed attempt; retry after exponential backoff
 //
-// After MaxAttempts failed attempts a task goes dead too. Dead tasks are
-// the queue's dead-letter state: logged at error level, counted, exported
-// as the tasks_dead gauge, and kept until an operator acts.
+// After MaxAttempts failed attempts a task goes dead too. An attempt is
+// counted when the task is claimed, not when it is settled, so a handler
+// that kills its process (out of memory, a fatal runtime error) reaches the
+// dead state as well instead of looping forever. Dead tasks are the queue's
+// dead-letter state: logged at error level, counted, exported as the
+// tasks_dead gauge, and kept until an operator acts.
 package taskqueue
 
 import (
@@ -50,7 +53,9 @@ type Task struct {
 	AggregateID uuid.UUID
 	DedupKey    string
 	Payload     json.RawMessage
-	// Attempts counts failed runs so far.
+	// Attempts counts the earlier runs that did not succeed: failed runs and
+	// runs that never settled because their process died. Postponed runs do
+	// not count.
 	Attempts int
 	RunAfter time.Time
 	// LeaseUntil is the lease deadline set at claim time. The queue also
