@@ -218,7 +218,7 @@ sequenceDiagram
     W->>R: POST /screenings (key transfer:id:screen)
     alt review
         R-->>W: 202 review, Retry-After
-        W->>DB: tx: step screen waiting; task postponed
+        W->>DB: tx: step screen waiting, task postponed
         Note over W,R: polled later with the same key
     else timeout, 5xx, reset
         R--xW: no decision
